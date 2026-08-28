@@ -1,0 +1,147 @@
+{
+  "ready": [
+    "#messageViewContainer",
+    "#contact-search",
+    ".conv-container",
+    "[class*='conversation-list']"
+  ],
+  "global_search_input": [
+    "#contact-search input",
+    "input[placeholder*='Tìm kiếm']",
+    "input[placeholder*='Tìm bạn']",
+    "input[placeholder*='Search']"
+  ],
+  "conversation_item": [
+    ".conv-item",
+    ".conv-container .item",
+    "[class*='conversation-item']",
+    "[class*='conv-item']"
+  ],
+  "conversation_header": [
+    ".header-title",
+    ".group-title",
+    "[class*='header-title']",
+    "#richInput[data-trailer]",
+    "[contenteditable='true'][data-trailer]"
+  ],
+  "sync_button": [
+    "button:has-text('Đồng bộ ngay')",
+    "[role='button']:has-text('Đồng bộ ngay')",
+    ".z--btn--v2:has-text('Đồng bộ ngay')"
+  ],
+  "sync_in_progress": [
+    ".sync-v2-banner",
+    "[data-translate-inner='STR_SYNC_IN_PROGRESS_BANNER_LABEL']",
+    ".z--btn--v2:has-text('Đang đồng bộ')"
+  ],
+  "message_search_button": [
+    "[title*='Tìm kiếm tin nhắn']",
+    "[aria-label*='Tìm kiếm tin nhắn']",
+    "button[title*='Tìm tin nhắn']",
+    "button[aria-label*='Tìm tin nhắn']"
+  ],
+  "message_search_input": [
+    "input[placeholder*='Tìm tin nhắn']",
+    "input[placeholder*='Tìm kiếm tin nhắn']",
+    "input[placeholder*='Search messages']"
+  ],
+  "date_filter_button": [
+    "[data-id='div_ChatTitle_FilterTime']",
+    ".chips--filter-select:has-text('Ngày gửi')",
+    "button:has-text('Ngày gửi')",
+    "[role='button']:has-text('Ngày gửi')",
+    "button:has-text('Theo ngày')",
+    "[role='button']:has-text('Theo ngày')",
+    "button:has-text('Thời gian')"
+  ],
+  "date_input": [
+    "input[type='date']",
+    "input[placeholder*='Chọn ngày']",
+    "input[placeholder*='dd/mm']"
+  ],
+  "date_picker_trigger": [
+    ".date-picker-container .cal-preview-v3",
+    ".cal-preview-v3"
+  ],
+  "apply_filter_button": [
+    ".z--btn--v2:has-text('Xác nhận'):not([data-disabled='disabled'])",
+    "button:has-text('Áp dụng')",
+    "button:has-text('Xong')",
+    "button:has-text('Tìm kiếm')",
+    "[role='button']:has-text('Áp dụng')"
+  ],
+  "search_result_item": [
+    ".search-message__item",
+    "[class*='search-result'] [class*='msg-item']",
+    "[class*='search-result'] [class*='message']"
+  ],
+  "search_empty_state": [
+    ".search-message-empty__des.--no-result",
+    "[data-translate-inner='STR_SEARCH_IN_CONV_NO_RESULT']"
+  ],
+  "message_view": [
+    "#messageViewContainer",
+    "[class*='message-view']",
+    "[class*='chat-content']"
+  ],
+  "scroll_container": [
+    "#messageViewContainer > .transform-gpu",
+    "#messageViewScroll",
+    ".message-view__scroll",
+    ".virtualized-scroll",
+    "#scroll-vertical",
+    "#messageViewContainer [class*='scroll']",
+    "#messageViewContainer",
+    "[class*='message-view'] [class*='scroll']",
+    "[class*='chat-content']"
+  ],
+  "message": [
+    ".chat-message",
+    ".message-frame",
+    "[id^='message-frame_']",
+    "[data-message-id]",
+    "[data-msg-id]",
+    "[data-id^='msg']",
+    "[class*='message-item']"
+  ],
+  "date_divider": [
+    "[class*='date-divider']",
+    "[class*='message-date']",
+    ".date-message",
+    ".chat-date"
+  ],
+  "sender": [
+    ".card-sender-name",
+    "[class*='sender-name']",
+    "[class*='message-sender']"
+  ],
+  "timestamp": [
+    ".card-send-time__sendTime",
+    ".card-send-time",
+    "time",
+    "[class*='message-time']"
+  ],
+  "content": [
+    "[data-component='message-text-content']",
+    ".chat-message-content",
+    ".chat-message-caption",
+    "[class*='message-content']",
+    "[class*='text-message']",
+    ".card"
+  ],
+  "noise": [
+    "script",
+    "style",
+    "svg",
+    "button",
+    "input",
+    "textarea",
+    "[aria-hidden='true']",
+    ".message-reaction-container",
+    ".message-reaction-v2-space",
+    ".reaction-emoji-list",
+    ".react-effect",
+    ".reacts-list",
+    ".chat-message__actions"
+  ]
+}

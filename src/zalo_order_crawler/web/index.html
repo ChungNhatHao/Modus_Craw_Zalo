@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Zalo Order Crawler</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+
+    <main class="shell">
+      <header class="hero">
+        <div class="brand-mark" aria-hidden="true">
+          <span>Z</span>
+        </div>
+        <div>
+          <div class="eyebrow">CÔNG CỤ NỘI BỘ · CHẠY CỤC BỘ</div>
+          <h1>Zalo Order Crawler</h1>
+          <p>Đồng bộ phiên đăng nhập, chọn nhóm và thu thập đơn hàng theo ngày.</p>
+        </div>
+        <div class="local-badge"><span></span>Dữ liệu cục bộ</div>
+      </header>
+
+      <section class="card auth-card" aria-labelledby="auth-title">
+        <div class="section-number">01</div>
+        <div class="section-body">
+          <div class="section-heading">
+            <div>
+              <h2 id="auth-title">Xác thực Zalo</h2>
+              <p>Mở hồ sơ trình duyệt riêng, tự đăng nhập và đồng bộ tin nhắn trước khi crawl.</p>
+            </div>
+            <div id="auth-pill" class="status-pill idle"><i></i><span>Chưa xác thực</span></div>
+          </div>
+
+          <div class="auth-actions">
+            <button id="auth-start" class="button button-secondary" type="button">
+              <span class="button-icon">↗</span>
+              Mở Zalo để đăng nhập
+            </button>
+            <button id="auth-complete" class="button button-ghost" type="button" disabled>
+              <span class="button-icon">✓</span>
+              Đã đăng nhập &amp; đồng bộ xong
+            </button>
+          </div>
+          <div id="auth-message" class="inline-message">Chưa mở phiên xác thực Zalo.</div>
+          <ol class="micro-steps">
+            <li><span>1</span>Bấm mở Zalo</li>
+            <li><span>2</span>Đăng nhập và tự đồng bộ</li>
+            <li><span>3</span>Quay lại xác nhận hoàn tất</li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="crawl-title">
+        <div class="section-number">02</div>
+        <div class="section-body">
+          <div class="section-heading">
+            <div>
+              <h2 id="crawl-title">Thiết lập lượt crawl</h2>
+              <p>Các nhóm được xử lý lần lượt để không xung đột phiên trình duyệt.</p>
+            </div>
+          </div>
+
+          <form id="crawl-form">
+            <div class="field">
+              <div class="field-label-row">
+                <label for="groups">Danh sách tên nhóm</label>
+                <span id="group-count" class="counter">0 nhóm</span>
+              </div>
+              <textarea
+                id="groups"
+                name="groups"
+                rows="7"
+                spellcheck="false"
+                placeholder="Mỗi dòng một tên nhóm, ví dụ:&#10;Modus-test bot v2&#10;Nhóm đơn hàng miền Nam"
+                required
+              ></textarea>
+              <small>Nhập đúng tên hiển thị trên Zalo. Dòng trống và tên trùng sẽ được bỏ qua.</small>
+            </div>
+
+            <div class="field date-field">
+              <label for="crawl-date">Ngày cần crawl</label>
+              <input id="crawl-date" name="date" type="date" required>
+              <small id="timezone-note">Mặc định là ngày hiện tại.</small>
+            </div>
+
+            <button id="crawl-start" class="button button-primary" type="submit">
+              <span class="button-icon">▶</span>
+              Bắt đầu crawl dữ liệu
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <section class="card progress-card" aria-labelledby="progress-title">
+        <div class="section-number">03</div>
+        <div class="section-body">
+          <div class="section-heading">
+            <div>
+              <h2 id="progress-title">Tiến trình</h2>
+              <p id="crawl-message">Chưa có lượt crawl.</p>
+            </div>
+            <div id="crawl-pill" class="status-pill idle"><i></i><span>Sẵn sàng</span></div>
+          </div>
+
+          <div class="progress-track" aria-label="Tiến độ crawl">
+            <div id="progress-bar" class="progress-bar"></div>
+          </div>
+          <div class="progress-meta">
+            <span id="progress-count">0 / 0 nhóm</span>
+            <span id="current-group">Chưa bắt đầu</span>
+          </div>
+          <div id="results" class="results empty-results">
+            Kết quả của từng nhóm sẽ xuất hiện tại đây.
+          </div>
+        </div>
+      </section>
+
+      <section id="ai-results-card" class="card ai-results-card" aria-labelledby="ai-results-title">
+        <div class="section-number">04</div>
+        <div class="section-body">
+          <div class="section-heading ai-heading">
+            <div>
+              <h2 id="ai-results-title">Kết quả AI</h2>
+              <p id="ai-results-subtitle">Kết quả đơn hàng và hình ảnh sẽ tự xuất hiện sau khi crawl xong.</p>
+            </div>
+            <div id="ai-results-pill" class="status-pill idle"><i></i><span>Chưa có dữ liệu</span></div>
+          </div>
+
+          <div id="ai-summary" class="ai-summary" hidden>
+            <div class="summary-tile">
+              <span>Tin đã đọc</span>
+              <strong id="summary-messages">0</strong>
+            </div>
+            <div class="summary-tile order-tile">
+              <span>Đơn hàng</span>
+              <strong id="summary-orders">0</strong>
+            </div>
+            <div class="summary-tile">
+              <span>Ảnh tin nhắn</span>
+              <strong id="summary-images">0</strong>
+            </div>
+            <div class="summary-tile">
+              <span>AI đã đánh giá</span>
+              <strong id="summary-classified">0</strong>
+            </div>
+          </div>
+
+          <div id="ai-toolbar" class="ai-toolbar" hidden>
+            <div class="filter-group" role="group" aria-label="Lọc kết quả AI">
+              <button class="filter-chip active" type="button" data-filter="orders">Đơn hàng</button>
+              <button class="filter-chip" type="button" data-filter="all">Tất cả tin</button>
+              <button class="filter-chip" type="button" data-filter="non-orders">Không phải đơn</button>
+            </div>
+            <span id="ai-visible-count" class="visible-count"></span>
+          </div>
+
+          <div id="ai-results" class="ai-message-list empty-results">
+            Chưa có kết quả để hiển thị.
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <span>Phiên đăng nhập được lưu trong hồ sơ Playwright trên máy này.</span>
+        <span>API key và cookie không xuất hiện trên giao diện.</span>
+      </footer>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

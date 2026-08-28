@@ -1,0 +1,15 @@
+.env
+.venv/
+.browser-profile/
+.chrome-cdp-profile/
+.playwright-browsers/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+output/
+debug/
+.cache/
+.runtime/
+.agents/
+.codex/
