@@ -1,0 +1,214 @@
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from zalo_order_crawler.drive_output import (
+    DriveResource,
+    GoogleDriveOutputError,
+    GoogleDriveOutputPublisher,
+)
+from zalo_order_crawler.models import CleanMessage, MediaAsset
+
+
+class FakeResponse:
+    status_code = 200
+    text = ""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+
+    def json(self) -> dict[str, Any]:
+        return self.payload
+
+
+class FakeSession:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+
+    def request(self, *_: Any, **__: Any) -> FakeResponse:
+        return FakeResponse(self.payload)
+
+
+class RecordingPublisher(GoogleDriveOutputPublisher):
+    def __init__(self) -> None:
+        super().__init__(session=object(), parent_folder_id="folder123")
+        self.sheet_name = ""
+        self.folder_name = ""
+        self.rows: list[list[Any]] = []
+        self.uploaded: list[tuple[str, str, str]] = []
+
+    def _ensure_daily_sheet(self, name: str) -> tuple[DriveResource, str, int]:
+        self.sheet_name = name
+        return (
+            DriveResource(
+                id="sheet-id",
+                name=name,
+                url="https://docs.google.com/spreadsheets/d/sheet-id/edit",
+            ),
+            "Tin nhắn",
+            1000,
+        )
+
+    def _append_unique_text_rows(
+        self,
+        spreadsheet_id: str,
+        sheet_title: str,
+        row_count: int,
+        rows: list[list[Any]],
+    ) -> int:
+        assert spreadsheet_id == "sheet-id"
+        assert sheet_title == "Tin nhắn"
+        assert row_count == 1000
+        self.rows = rows
+        return len(rows)
+
+    def _ensure_image_folder(self, name: str) -> DriveResource:
+        self.folder_name = name
+        return DriveResource(
+            id="image-folder-id",
+            name=name,
+            url="https://drive.google.com/drive/folders/image-folder-id",
+        )
+
+    def _upload_unique_image(
+        self,
+        folder_id: str,
+        *,
+        group_name: str,
+        message_id: str,
+        media: MediaAsset,
+        media_path: Path,
+    ) -> bool:
+        assert folder_id == "image-folder-id"
+        self.uploaded.append((group_name, message_id, media_path.name))
+        return True
+
+
+def test_publish_splits_text_and_message_images_by_selected_date(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    image = assets / "order.jpg"
+    image.write_bytes(b"jpeg")
+    thumbnail = assets / "thumbnail.jpg"
+    thumbnail.write_bytes(b"thumbnail")
+    messages = [
+        CleanMessage(
+            message_id="text-1",
+            sequence=1,
+            sender="Lan",
+            timestamp_text="09:15",
+            content="Chốt 2 áo",
+            direction="incoming",
+            message_type="text",
+        ),
+        CleanMessage(
+            message_id="image-1",
+            sequence=2,
+            content="[Hình ảnh]",
+            message_type="image",
+            media=[
+                MediaAsset(
+                    path="assets/order.jpg",
+                    mime_type="image/jpeg",
+                    role="message_image",
+                    sha256="abc",
+                ),
+                MediaAsset(
+                    path="assets/thumbnail.jpg",
+                    mime_type="image/jpeg",
+                    role="link_thumbnail",
+                    sha256="def",
+                ),
+            ],
+        ),
+    ]
+    publisher = RecordingPublisher()
+
+    result = publisher.publish(
+        run_dir=tmp_path,
+        group_name="Nhóm A",
+        target_date=date(2026, 8, 30),
+        messages=messages,
+    )
+
+    assert publisher.sheet_name == "30-08-2026"
+    assert publisher.folder_name == "30-08-2026_image"
+    assert publisher.rows == [
+        [
+            "30-08-2026",
+            "Nhóm A",
+            "text-1",
+            1,
+            "Lan",
+            "09:15",
+            "incoming",
+            "Chốt 2 áo",
+            "text",
+        ]
+    ]
+    assert publisher.uploaded == [("Nhóm A", "image-1", "order.jpg")]
+    assert result["sheet"]["rows_added"] == 1
+    assert result["image_folder"]["images_uploaded"] == 1
+
+
+def test_append_unique_text_rows_skips_existing_group_message_key() -> None:
+    publisher = GoogleDriveOutputPublisher(object(), "folder123")
+    requests: list[dict[str, Any]] = []
+    publisher._get_values = lambda *_: [["Nhóm A", "m1"]]  # type: ignore[method-assign]
+    publisher._request_json = (  # type: ignore[method-assign]
+        lambda method, url, **kwargs: requests.append(
+            {"method": method, "url": url, **kwargs}
+        )
+        or {}
+    )
+    rows = [
+        ["30-08-2026", "Nhóm A", "m1", 1, "", "", "incoming", "Cũ", "text"],
+        ["30-08-2026", "Nhóm B", "m2", 2, "", "", "incoming", "Mới", "text"],
+    ]
+
+    added = publisher._append_unique_text_rows(
+        "sheet-id", "Tin nhắn", 1000, rows
+    )
+
+    assert added == 1
+    assert requests[0]["json"]["values"] == [rows[1]]
+
+
+def test_media_path_cannot_escape_run_directory(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"private")
+
+    with pytest.raises(GoogleDriveOutputError, match="ngoài thư mục"):
+        GoogleDriveOutputPublisher._resolve_media_path(run_dir, "../outside.jpg")
+
+
+def test_verify_destination_requires_permission_to_add_files() -> None:
+    publisher = GoogleDriveOutputPublisher(
+        FakeSession(
+            {
+                "id": "folder123",
+                "name": "Output",
+                "mimeType": "application/vnd.google-apps.folder",
+                "webViewLink": "https://drive.google.com/drive/folders/folder123",
+                "trashed": False,
+                "capabilities": {"canAddChildren": False},
+            }
+        ),
+        "folder123",
+    )
+
+    with pytest.raises(GoogleDriveOutputError, match="không có quyền"):
+        publisher.verify_destination()
+
+
+def test_web_oauth_redirect_port_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_OAUTH_REDIRECT_PORT", "8766")
+    assert GoogleDriveOutputPublisher._oauth_redirect_port() == 8766
+
+    monkeypatch.setenv("GOOGLE_OAUTH_REDIRECT_PORT", "invalid")
+    with pytest.raises(GoogleDriveOutputError, match="số nguyên"):
+        GoogleDriveOutputPublisher._oauth_redirect_port()

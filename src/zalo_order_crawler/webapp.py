@@ -267,6 +267,7 @@ class AppManager:
                     or ("Hoàn tất." if return_code == 0 else f"Mã lỗi {return_code}."),
                     "output_dir": output_dir,
                     "run_id": self._run_id(output_dir) if output_dir else None,
+                    "google_drive": self._google_drive_output(output_dir),
                 }
             except Exception as exc:
                 result = {
@@ -275,6 +276,7 @@ class AppManager:
                     "message": str(exc),
                     "output_dir": None,
                     "run_id": None,
+                    "google_drive": {},
                 }
             finally:
                 self._crawl_process = None
@@ -325,6 +327,14 @@ class AppManager:
         except (OSError, ValueError):
             return None
         return relative.as_posix()
+
+    @staticmethod
+    def _google_drive_output(output_dir: str | Path | None) -> dict[str, Any]:
+        if not output_dir:
+            return {}
+        manifest = _read_json(Path(output_dir) / "manifest.json", {})
+        value = manifest.get("google_drive")
+        return value if isinstance(value, dict) else {}
 
     def _resolve_run_dir(self, run_id: str) -> Path:
         if not run_id or len(run_id) > 500:
@@ -401,6 +411,11 @@ class AppManager:
                 "message_images": manifest.get("message_image_count", 0),
                 "warnings": manifest.get("warnings", []),
             },
+            "google_drive": (
+                manifest.get("google_drive")
+                if isinstance(manifest.get("google_drive"), dict)
+                else {}
+            ),
             "messages": rendered_messages,
         }
 

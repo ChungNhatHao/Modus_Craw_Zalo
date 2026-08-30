@@ -68,6 +68,7 @@ class CrawlManifest(BaseModel):
     media_count: int = 0
     message_image_count: int = 0
     files: dict[str, str]
+    google_drive: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 

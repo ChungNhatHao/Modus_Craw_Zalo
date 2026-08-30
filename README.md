@@ -28,6 +28,9 @@ Quy trình sử dụng:
 7. Khi hoàn tất, phần **Kết quả AI** tự hiển thị số tin, số đơn, ảnh đính kèm,
    nội dung AI đánh giá, sản phẩm, số lượng và độ tin cậy. Có thể lọc giữa đơn hàng,
    tất cả tin và các tin không phải đơn; bấm ảnh để xem kích thước đầy đủ.
+8. Tin nhắn chữ được thêm vào Google Sheet `DD-MM-YYYY`; ảnh tin nhắn được tải lên
+   folder `DD-MM-YYYY_image`. Link mở Sheet và folder ảnh xuất hiện ở kết quả từng
+   nhóm trên UI.
 
 Mỗi đơn có hai chỉ số riêng: **Nhận diện đơn** cho quyết định đây có phải đơn hàng
 hay không và **Thông tin đơn** cho độ tin cậy của dữ liệu đã trích xuất. Đơn dưới 90%
@@ -54,6 +57,8 @@ Có thể dùng cổng khác hoặc không tự mở trang UI:
    các nội dung giao diện không cần thiết.
 7. Gửi nội dung đã làm sạch, metadata và ảnh tin nhắn sang Gemini. Gemini trả JSON
    theo schema cố định; tool xuất các đơn được nhận diện ra CSV.
+8. Ghi phần nội dung chữ vào Google Sheet theo ngày và tải `message_image` lên folder
+   ảnh cùng ngày trong folder Drive đã cấu hình.
 
 ## Cài đặt
 
@@ -76,6 +81,34 @@ Mở `.env` và điền tối thiểu:
 ZALO_GROUP_NAME=Tên chính xác của nhóm
 GEMINI_API_KEY=api-key-của-bạn
 ```
+
+### Cấu hình Google Drive output
+
+1. Trong Google Cloud, bật **Google Drive API** và **Google Sheets API**. Có thể dùng
+   OAuth Client loại **Web application** hoặc **Desktop app**.
+   - Với Web Client, thêm Authorized redirect URI chính xác:
+     `http://127.0.0.1:8766/`.
+   - Desktop Client không cần cấu hình redirect URI.
+2. Cấu hình `.env` (không commit file client hoặc token):
+
+```dotenv
+GOOGLE_DRIVE_UPLOAD_ENABLED=true
+GOOGLE_DRIVE_PARENT_FOLDER_ID=16kKkK80VwV92uWwxaBklivhHhYArrY2G
+GOOGLE_OAUTH_CLIENT_SECRET_FILE=/duong-dan-tuyet-doi/client-secret.json
+GOOGLE_OAUTH_TOKEN_FILE=.google-drive-token.json
+GOOGLE_OAUTH_REDIRECT_PORT=8766
+```
+
+Lần chạy đầu sẽ mở trình duyệt để đăng nhập Google và cấp quyền; các lần sau dùng
+token cục bộ. Ngoài ra có thể dùng Application Default Credentials qua
+`GOOGLE_APPLICATION_CREDENTIALS`. Nếu dùng service account, folder phải được chia
+sẻ quyền Editor cho `client_email`; Shared Drive phù hợp hơn My Drive vì giới hạn
+quyền sở hữu/dung lượng của service account.
+
+Tên Sheet/folder lấy theo ngày được chọn để crawl, không lấy theo giờ hệ thống khi
+chạy lại dữ liệu cũ. Nếu chạy lại cùng nhóm và ngày, tool dùng lại tài nguyên đã tạo,
+không thêm lại tin nhắn/ảnh có cùng định danh. Có thể đặt
+`GOOGLE_DRIVE_UPLOAD_ENABLED=false` để chỉ lưu output cục bộ.
 
 Không đưa `.env` lên Git. `.env`, hồ sơ trình duyệt, cache và dữ liệu đầu ra đã được
 thêm vào `.gitignore`.

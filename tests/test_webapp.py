@@ -124,6 +124,13 @@ def test_run_result_returns_ai_decision_and_safe_asset_url(tmp_path: Path) -> No
                 "order_count": 1,
                 "media_count": 1,
                 "message_image_count": 1,
+                "google_drive": {
+                    "sheet": {
+                        "id": "sheet-id",
+                        "name": "25-08-2026",
+                        "url": "https://docs.google.com/spreadsheets/d/sheet-id/edit",
+                    }
+                },
                 "warnings": [],
             }
         ),
@@ -175,6 +182,7 @@ def test_run_result_returns_ai_decision_and_safe_asset_url(tmp_path: Path) -> No
     assert result["messages"][0]["decision"]["products"] == ["Cải thìa"]
     assert result["messages"][0]["decision"]["data_confidence"] == 0.93
     assert result["messages"][0]["media"][0]["url"].startswith("/api/run-asset?")
+    assert result["google_drive"]["sheet"]["id"] == "sheet-id"
     assert asset == image_path
     assert mime_type == "image/jpeg"
 

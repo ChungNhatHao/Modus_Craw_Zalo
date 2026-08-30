@@ -10,6 +10,9 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 
+DEFAULT_GOOGLE_DRIVE_PARENT_FOLDER_ID = "16kKkK80VwV92uWwxaBklivhHhYArrY2G"
+
+
 def _as_int(values: Mapping[str, str], name: str, default: int) -> int:
     raw = values.get(name, str(default)).strip()
     try:
@@ -45,6 +48,8 @@ class Settings:
     max_scrolls: int
     scroll_pause_ms: int
     allow_zalo_history_sync: bool
+    google_drive_upload_enabled: bool = True
+    google_drive_parent_folder_id: str = DEFAULT_GOOGLE_DRIVE_PARENT_FOLDER_ID
 
     @classmethod
     def from_env(
@@ -95,6 +100,13 @@ class Settings:
             max_scrolls=_as_int(values, "MAX_SCROLLS", 300),
             scroll_pause_ms=_as_int(values, "SCROLL_PAUSE_MS", 650),
             allow_zalo_history_sync=_as_bool(values, "ALLOW_ZALO_HISTORY_SYNC", False),
+            google_drive_upload_enabled=_as_bool(
+                values, "GOOGLE_DRIVE_UPLOAD_ENABLED", True
+            ),
+            google_drive_parent_folder_id=values.get(
+                "GOOGLE_DRIVE_PARENT_FOLDER_ID",
+                DEFAULT_GOOGLE_DRIVE_PARENT_FOLDER_ID,
+            ).strip(),
         )
 
 

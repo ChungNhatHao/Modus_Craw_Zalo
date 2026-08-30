@@ -10,6 +10,7 @@ from .browser import BrowserSession, save_diagnostics
 from .classifier import GeminiOrderClassifier
 from .config import Settings, load_selectors
 from .crawler import ZaloCrawler
+from .drive_output import GoogleDriveOutputPublisher
 from .models import CleanMessage, CrawlManifest
 from .parser import clean_messages
 from .storage import (
@@ -54,6 +55,16 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         raise ValueError("Thiếu tên nhóm: truyền --group hoặc đặt ZALO_GROUP_NAME trong .env.")
     if with_ai and not settings.gemini_api_key:
         raise ValueError("Thiếu GEMINI_API_KEY trong .env. Dùng lệnh 'crawl' nếu chưa muốn chạy AI.")
+
+    drive_publisher = None
+    if settings.google_drive_upload_enabled:
+        print("Đang kiểm tra quyền ghi Google Drive...")
+        drive_publisher = GoogleDriveOutputPublisher.from_default_credentials(
+            settings.google_drive_parent_folder_id,
+            project_dir=settings.project_dir,
+        )
+        destination = drive_publisher.verify_destination()
+        print(f"Google Drive output: {destination.name}")
 
     started_at = datetime.now(settings.timezone)
     run_name = started_at.strftime("%H%M%S")
@@ -148,6 +159,24 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         for message in cleaned
         for item in message.media
     )
+    google_drive: dict[str, object] = {}
+    drive_error: Exception | None = None
+    if drive_publisher is not None:
+        print("Đang lưu tin nhắn và hình ảnh lên Google Drive...")
+        try:
+            google_drive = drive_publisher.publish(
+                run_dir=run_dir,
+                group_name=settings.group_name,
+                target_date=target_date,
+                messages=cleaned,
+            )
+        except Exception as exc:
+            drive_error = exc
+            google_drive = {"error": str(exc)}
+
+    warnings = list(artifacts.warnings)
+    if drive_error is not None:
+        warnings.append(f"Không lưu được Google Drive: {drive_error}")
     manifest = CrawlManifest(
         group_name=settings.group_name,
         target_date=target_date,
@@ -161,15 +190,26 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         media_count=media_count,
         message_image_count=message_image_count,
         files=files,
-        warnings=artifacts.warnings,
+        google_drive=google_drive,
+        warnings=warnings,
     )
     write_json(manifest_json, manifest)
+
+    if drive_error is not None:
+        raise RuntimeError(f"Không lưu được output lên Google Drive: {drive_error}")
 
     print(f"Hoàn tất: {run_dir}")
     if with_ai:
         print(f"Đơn hàng AI nhận diện: {manifest.order_count}; CSV: {orders_csv}")
-    for warning in artifacts.warnings:
+    sheet = google_drive.get("sheet")
+    if isinstance(sheet, dict):
+        print(f"Google Sheet: {sheet.get('url', '')}")
+    image_folder = google_drive.get("image_folder")
+    if isinstance(image_folder, dict):
+        print(f"Thư mục ảnh Google Drive: {image_folder.get('url', '')}")
+    for warning in warnings:
         print(f"Cảnh báo: {warning}")
+    print("Hoàn tất và đã cập nhật output Google Drive.")
     return 0
 
 

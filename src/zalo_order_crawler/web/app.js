@@ -143,6 +143,21 @@ function renderResults(results, crawlState) {
     path.title = result.output_dir || "";
     path.textContent = result.output_dir || "Không có đầu ra";
     actions.append(path);
+    const drive = result.google_drive || {};
+    const driveLinks = [
+      [drive.sheet, "Mở Google Sheet"],
+      [drive.image_folder, "Mở thư mục ảnh"],
+    ];
+    driveLinks.forEach(([resource, label]) => {
+      if (!resource || !resource.url) return;
+      const link = document.createElement("a");
+      link.className = "result-drive-link";
+      link.href = resource.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = label;
+      actions.append(link);
+    });
     if (result.ok && result.run_id) {
       const view = document.createElement("button");
       view.type = "button";
