@@ -1,15 +1,24 @@
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import openpyxl
 import pytest
 
 from zalo_order_crawler.drive_output import (
     DriveResource,
     GoogleDriveOutputError,
     GoogleDriveOutputPublisher,
+    OCR_HEADERS,
 )
-from zalo_order_crawler.models import CleanMessage, MediaAsset, OrderDecision
+from zalo_order_crawler.models import (
+    CleanMessage,
+    ImageOcrResult,
+    MediaAsset,
+    OcrLineItem,
+    OrderDecision,
+)
 
 
 class FakeResponse:
@@ -38,6 +47,8 @@ class RecordingPublisher(GoogleDriveOutputPublisher):
         self.folder_name = ""
         self.rows: list[list[Any]] = []
         self.uploaded: list[tuple[str, str, str]] = []
+        self.ocr_workbook_name = ""
+        self.ocr_rows: list[list[Any]] = []
 
     def _ensure_daily_sheet(self, name: str) -> tuple[DriveResource, str, int]:
         self.sheet_name = name
@@ -84,6 +95,19 @@ class RecordingPublisher(GoogleDriveOutputPublisher):
         assert folder_id == "image-folder-id"
         self.uploaded.append((group_name, message_id, media_path.name))
         return True
+
+    def _ensure_ocr_workbook(self, name: str) -> DriveResource:
+        self.ocr_workbook_name = name
+        return DriveResource(
+            id="ocr-workbook-id",
+            name=name,
+            url="https://drive.google.com/file/d/ocr-workbook-id/view",
+        )
+
+    def _append_unique_ocr_rows(self, file_id: str, rows: list[list[Any]]) -> int:
+        assert file_id == "ocr-workbook-id"
+        self.ocr_rows = rows
+        return len(rows)
 
 
 def test_publish_splits_text_and_message_images_by_selected_date(tmp_path: Path) -> None:
@@ -152,6 +176,118 @@ def test_publish_splits_text_and_message_images_by_selected_date(tmp_path: Path)
     assert publisher.uploaded == [("Nhóm A", "image-1", "order.jpg")]
     assert result["sheet"]["rows_added"] == 1
     assert result["image_folder"]["images_uploaded"] == 1
+
+
+def test_publish_uploads_ocr_workbook_when_rows_present(tmp_path: Path) -> None:
+    publisher = RecordingPublisher()
+
+    result = publisher.publish(
+        run_dir=tmp_path,
+        group_name="Nhóm A",
+        target_date=date(2026, 8, 30),
+        messages=[],
+        ocr_results=[
+            ImageOcrResult(
+                message_id="m1",
+                media_path="assets/m1.jpg",
+                applicable=True,
+                items=[
+                    OcrLineItem(
+                        customer_code="S6",
+                        customer_name="Quán Rau",
+                        product_name="Rau muống",
+                        unit="kg",
+                        quantity=2,
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert publisher.ocr_workbook_name == "30-08-2026_OCR.xlsx"
+    assert publisher.ocr_rows == [
+        ["30-08-2026", "Nhóm A", "m1", "S6", "Quán Rau", "Rau muống", "kg", 2]
+    ]
+    assert result["ocr_workbook"]["rows_added"] == 1
+
+
+def test_publish_skips_ocr_workbook_when_no_applicable_results(tmp_path: Path) -> None:
+    publisher = RecordingPublisher()
+
+    result = publisher.publish(
+        run_dir=tmp_path,
+        group_name="Nhóm A",
+        target_date=date(2026, 8, 30),
+        messages=[],
+        ocr_results=[
+            ImageOcrResult(
+                message_id="m1", media_path="assets/m1.jpg", applicable=False
+            )
+        ],
+    )
+
+    assert publisher.ocr_workbook_name == ""
+    assert "ocr_workbook" not in result
+
+
+def test_ocr_rows_skip_non_applicable_and_blank_product_name() -> None:
+    ocr_results = [
+        ImageOcrResult(
+            message_id="m1",
+            media_path="assets/m1.jpg",
+            applicable=True,
+            items=[
+                OcrLineItem(product_name="Rau muống", unit="kg", quantity=2),
+                OcrLineItem(product_name="   "),
+            ],
+        ),
+        ImageOcrResult(message_id="m2", media_path="assets/m2.jpg", applicable=False),
+    ]
+
+    rows = GoogleDriveOutputPublisher._ocr_rows("Nhóm A", date(2026, 8, 30), ocr_results)
+
+    assert rows == [["30-08-2026", "Nhóm A", "m1", "", "", "Rau muống", "kg", 2]]
+
+
+def test_append_unique_ocr_rows_skips_existing_group_message_product_key() -> None:
+    publisher = GoogleDriveOutputPublisher(object(), "folder123")
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(list(OCR_HEADERS))
+    sheet.append(
+        ["30-08-2026", "Nhóm A", "m1", "S6", "Quán Rau", "Rau muống", "kg", 2]
+    )
+    buffer = BytesIO()
+    workbook.save(buffer)
+    publisher._download_file = lambda file_id: buffer.getvalue()  # type: ignore[method-assign]
+    saved: dict[str, Any] = {}
+
+    def fake_update(file_id: str, mime_type: str, data: bytes) -> None:
+        saved["file_id"] = file_id
+        saved["workbook"] = openpyxl.load_workbook(BytesIO(data))
+
+    publisher._update_file_content = fake_update  # type: ignore[method-assign]
+    rows = [
+        ["30-08-2026", "Nhóm A", "m1", "S6", "Quán Rau", "Rau muống", "kg", 2],
+        ["30-08-2026", "Nhóm A", "m1", "S6", "Quán Rau", "Cải ngọt", "kg", 1],
+    ]
+
+    added = publisher._append_unique_ocr_rows("workbook-id", rows)
+
+    assert added == 1
+    assert saved["file_id"] == "workbook-id"
+    saved_rows = list(saved["workbook"].active.iter_rows(values_only=True))
+    assert saved_rows[-1] == (
+        "30-08-2026",
+        "Nhóm A",
+        "m1",
+        "S6",
+        "Quán Rau",
+        "Cải ngọt",
+        "kg",
+        1,
+    )
+    assert len(saved_rows) == 3
 
 
 def test_append_unique_text_rows_skips_existing_group_message_key() -> None:

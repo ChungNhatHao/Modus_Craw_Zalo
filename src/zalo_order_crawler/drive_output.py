@@ -8,11 +8,14 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .models import CleanMessage, MediaAsset, OrderDecision
+import openpyxl
+
+from .models import CleanMessage, ImageOcrResult, MediaAsset, OrderDecision
 from .storage import safe_slug
 
 
@@ -37,6 +40,19 @@ DEFAULT_BRANCH_MAPPINGS = (
     ("Sườn Thảo Điền", "Chi nhánh Thảo Điền"),
 )
 IMAGE_MARKER_KEY = "zaloCrawlerImageKey"
+OCR_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+OCR_MARKER_VALUE = "order-image-ocr-v1"
+OCR_SHEET_TITLE = "OCR"
+OCR_HEADERS = (
+    "Ngày",
+    "Nhóm",
+    "Mã tin nhắn",
+    "Mã khách hàng",
+    "Tên khách hàng",
+    "Tên hàng",
+    "Đơn vị",
+    "Số lượng",
+)
 LEGACY_SHEET_HEADERS = (
     "Ngày",
     "Nhóm",
@@ -188,6 +204,7 @@ class GoogleDriveOutputPublisher:
         target_date: date,
         messages: Iterable[CleanMessage],
         decisions: Iterable[OrderDecision] = (),
+        ocr_results: Iterable[ImageOcrResult] = (),
     ) -> dict[str, Any]:
         run_dir = run_dir.resolve()
         message_list = list(messages)
@@ -233,6 +250,17 @@ class GoogleDriveOutputPublisher:
                 "url": folder.url,
                 "images_uploaded": uploaded,
                 "images_existing": existing,
+            }
+
+        ocr_rows = self._ocr_rows(group_name, target_date, ocr_results)
+        if ocr_rows:
+            workbook_resource = self._ensure_ocr_workbook(f"{daily_name}_OCR.xlsx")
+            rows_added = self._append_unique_ocr_rows(workbook_resource.id, ocr_rows)
+            output["ocr_workbook"] = {
+                "id": workbook_resource.id,
+                "name": workbook_resource.name,
+                "url": workbook_resource.url,
+                "rows_added": rows_added,
             }
 
         return output
@@ -306,6 +334,173 @@ class GoogleDriveOutputPublisher:
         if not candidate.is_file():
             raise GoogleDriveOutputError(f"Không tìm thấy ảnh output: {media_path}")
         return candidate
+
+    @staticmethod
+    def _ocr_rows(
+        group_name: str,
+        target_date: date,
+        ocr_results: Iterable[ImageOcrResult],
+    ) -> list[list[Any]]:
+        display_date = target_date.strftime("%d-%m-%Y")
+        rows: list[list[Any]] = []
+        for result in ocr_results:
+            if not result.applicable:
+                continue
+            for item in result.items:
+                if not item.product_name.strip():
+                    continue
+                rows.append(
+                    [
+                        display_date,
+                        group_name,
+                        result.message_id,
+                        item.customer_code,
+                        item.customer_name,
+                        item.product_name,
+                        item.unit,
+                        item.quantity if item.quantity is not None else "",
+                    ]
+                )
+        return rows
+
+    def _ensure_ocr_workbook(self, name: str) -> DriveResource:
+        marker_query = (
+            f"appProperties has {{ key='{SHEET_MARKER_KEY}' and "
+            f"value='{OCR_MARKER_VALUE}' }}"
+        )
+        resource = self._find_resource(
+            self.parent_folder_id, name, OCR_MIME, extra_query=marker_query
+        )
+        if resource is not None:
+            return resource
+        empty_workbook = self._build_workbook(OCR_HEADERS, [])
+        return self._create_binary_resource(
+            name,
+            OCR_MIME,
+            self.parent_folder_id,
+            empty_workbook,
+            app_properties={SHEET_MARKER_KEY: OCR_MARKER_VALUE},
+        )
+
+    def _append_unique_ocr_rows(self, file_id: str, rows: list[list[Any]]) -> int:
+        existing_bytes = self._download_file(file_id)
+        workbook = openpyxl.load_workbook(BytesIO(existing_bytes))
+        sheet = workbook.active
+        existing_keys: set[tuple[str, str, str]] = set()
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            if row and len(row) >= 6:
+                existing_keys.add(
+                    (str(row[1] or ""), str(row[2] or ""), str(row[5] or ""))
+                )
+        pending = [
+            row
+            for row in rows
+            if (str(row[1]), str(row[2]), str(row[5])) not in existing_keys
+        ]
+        if not pending:
+            return 0
+        for row in pending:
+            sheet.append(row)
+        buffer = BytesIO()
+        workbook.save(buffer)
+        self._update_file_content(file_id, OCR_MIME, buffer.getvalue())
+        return len(pending)
+
+    @staticmethod
+    def _build_workbook(headers: tuple[str, ...], rows: list[list[Any]]) -> bytes:
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = OCR_SHEET_TITLE
+        sheet.append(list(headers))
+        for row in rows:
+            sheet.append(row)
+        buffer = BytesIO()
+        workbook.save(buffer)
+        return buffer.getvalue()
+
+    def _create_binary_resource(
+        self,
+        name: str,
+        mime_type: str,
+        parent_id: str,
+        data: bytes,
+        *,
+        app_properties: dict[str, str] | None = None,
+    ) -> DriveResource:
+        metadata: dict[str, Any] = {"name": name, "parents": [parent_id]}
+        if app_properties:
+            metadata["appProperties"] = app_properties
+        boundary = f"codex-{uuid.uuid4().hex}"
+        metadata_bytes = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
+        body = b"\r\n".join(
+            [
+                f"--{boundary}".encode(),
+                b"Content-Type: application/json; charset=UTF-8",
+                b"",
+                metadata_bytes,
+                f"--{boundary}".encode(),
+                f"Content-Type: {mime_type}".encode(),
+                b"",
+                data,
+                f"--{boundary}--".encode(),
+                b"",
+            ]
+        )
+        payload = self._request_json(
+            "POST",
+            f"{DRIVE_UPLOAD_API}/files",
+            expected=(200, 201),
+            params={
+                "uploadType": "multipart",
+                "supportsAllDrives": "true",
+                "fields": "id",
+            },
+            headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+            data=body,
+        )
+        resource_id = str(payload.get("id") or "")
+        if not resource_id:
+            raise GoogleDriveOutputError("Google Drive không trả id tài nguyên mới.")
+        verified = self._request_json(
+            "GET",
+            f"{DRIVE_API}/files/{quote(resource_id, safe='')}",
+            params={
+                "supportsAllDrives": "true",
+                "fields": "id,name,mimeType,webViewLink",
+            },
+        )
+        return self._resource(verified)
+
+    def _download_file(self, file_id: str) -> bytes:
+        try:
+            response = self.session.request(
+                "GET",
+                f"{DRIVE_API}/files/{quote(file_id, safe='')}",
+                params={"alt": "media", "supportsAllDrives": "true"},
+                timeout=120,
+            )
+        except Exception as exc:
+            raise GoogleDriveOutputError(
+                f"Không kết nối được Google API: {exc}"
+            ) from exc
+        if response.status_code != 200:
+            raise GoogleDriveOutputError(
+                f"Google API trả HTTP {response.status_code} khi tải file {file_id}."
+            )
+        return response.content
+
+    def _update_file_content(self, file_id: str, mime_type: str, data: bytes) -> None:
+        self._request_json(
+            "PATCH",
+            f"{DRIVE_UPLOAD_API}/files/{quote(file_id, safe='')}",
+            params={
+                "uploadType": "media",
+                "supportsAllDrives": "true",
+                "fields": "id,name",
+            },
+            headers={"Content-Type": mime_type},
+            data=data,
+        )
 
     def ensure_branch_config(self) -> BranchConfig:
         marker_query = (

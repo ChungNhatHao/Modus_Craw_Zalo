@@ -11,13 +11,15 @@ from .classifier import GeminiOrderClassifier
 from .config import Settings, load_selectors
 from .crawler import ZaloCrawler
 from .drive_output import GoogleDriveOutputPublisher
-from .models import CleanMessage, CrawlManifest
+from .models import CleanMessage, CrawlManifest, ImageOcrResult
+from .ocr import GeminiOrderImageOcr
 from .parser import clean_messages
 from .storage import (
     safe_slug,
     write_html_fragment,
     write_json,
     write_jsonl,
+    write_order_ocr_csv,
     write_orders_csv,
     write_raw_html,
 )
@@ -111,13 +113,14 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
                 f"{exc}\nĐã lưu chẩn đoán tại {screenshot} và {html}."
             ) from exc
 
+    daily_name = target_date.strftime("%d-%m-%Y")
     raw_jsonl = run_dir / "raw_messages.jsonl"
     raw_html = run_dir / "raw_messages.html"
     view_html = run_dir / "message_view.html"
     styles_json = run_dir / "stylesheets.json"
     clean_jsonl = run_dir / "clean_messages.jsonl"
     classifications_jsonl = run_dir / "classifications.jsonl"
-    orders_csv = run_dir / "orders.csv"
+    orders_csv = run_dir / f"{daily_name}.csv"
     manifest_json = run_dir / "manifest.json"
 
     write_jsonl(raw_jsonl, artifacts.messages)
@@ -144,6 +147,29 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         write_jsonl(classifications_jsonl, decisions)
         write_orders_csv(orders_csv, cleaned, [item for item in decisions if item.is_order])
 
+    order_ocr_jsonl = run_dir / "order_ocr.jsonl"
+    order_ocr_csv = run_dir / f"{daily_name}-ocr.csv"
+    ocr_results: list[ImageOcrResult] = []
+    if with_ai:
+        order_ids = {item.message_id for item in decisions if item.is_order}
+        has_order_images = any(
+            media.role == "message_image"
+            for message in cleaned
+            if message.message_id in order_ids
+            for media in message.media
+        )
+        if has_order_images:
+            print("Đang OCR ảnh phiếu đặt hàng bằng Gemini...")
+            ocr_engine = GeminiOrderImageOcr(
+                api_key=settings.gemini_api_key or "",
+                model=settings.gemini_model,
+                cache_dir=settings.project_dir / ".cache" / "gemini-ocr",
+                media_base_dir=run_dir,
+            )
+            ocr_results = ocr_engine.extract(cleaned, decisions)
+            write_jsonl(order_ocr_jsonl, ocr_results)
+            write_order_ocr_csv(order_ocr_csv, settings.group_name, target_date, ocr_results)
+
     files = {
         "raw_jsonl": str(raw_jsonl),
         "raw_html": str(raw_html),
@@ -158,6 +184,13 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
                 "orders_csv": str(orders_csv),
             }
         )
+    if ocr_results:
+        files.update(
+            {
+                "order_ocr_jsonl": str(order_ocr_jsonl),
+                "order_ocr_csv": str(order_ocr_csv),
+            }
+        )
     if assets_dir.exists():
         files["assets_dir"] = str(assets_dir)
     media_count = sum(len(message.media) for message in cleaned)
@@ -165,6 +198,9 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         item.role == "message_image"
         for message in cleaned
         for item in message.media
+    )
+    ocr_item_count = sum(
+        len(result.items) for result in ocr_results if result.applicable
     )
     google_drive: dict[str, object] = {}
     if branch_config is not None:
@@ -185,6 +221,7 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
                     target_date=target_date,
                     messages=cleaned,
                     decisions=decisions,
+                    ocr_results=ocr_results,
                 )
             )
         except Exception as exc:
@@ -206,6 +243,8 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         order_count=sum(item.is_order for item in decisions),
         media_count=media_count,
         message_image_count=message_image_count,
+        ocr_image_count=len(ocr_results),
+        ocr_item_count=ocr_item_count,
         files=files,
         google_drive=google_drive,
         warnings=warnings,
@@ -218,12 +257,20 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
     print(f"Hoàn tất: {run_dir}")
     if with_ai:
         print(f"Đơn hàng AI nhận diện: {manifest.order_count}; CSV: {orders_csv}")
+        if ocr_results:
+            print(
+                f"Ảnh OCR phiếu đặt hàng: {manifest.ocr_image_count}; "
+                f"mặt hàng trích xuất: {manifest.ocr_item_count}"
+            )
     sheet = google_drive.get("sheet")
     if isinstance(sheet, dict):
         print(f"Google Sheet: {sheet.get('url', '')}")
     image_folder = google_drive.get("image_folder")
     if isinstance(image_folder, dict):
         print(f"Thư mục ảnh Google Drive: {image_folder.get('url', '')}")
+    ocr_workbook = google_drive.get("ocr_workbook")
+    if isinstance(ocr_workbook, dict):
+        print(f"File Excel OCR đơn đặt hàng: {ocr_workbook.get('url', '')}")
     branch_config_output = google_drive.get("branch_config")
     if isinstance(branch_config_output, dict):
         print(f"Cấu hình chi nhánh: {branch_config_output.get('url', '')}")
@@ -238,6 +285,13 @@ def settings_selectors(selectors: dict[str, list[str]], key: str) -> list[str]:
     if not values:
         raise ValueError(f"Thiếu nhóm selector bắt buộc: {key}")
     return values
+
+
+def _run_dir_date(output_dir: Path) -> date | None:
+    try:
+        return date.fromisoformat(output_dir.parent.name)
+    except ValueError:
+        return None
 
 
 def _read_clean_messages(path: Path) -> list[CleanMessage]:
@@ -279,8 +333,10 @@ def _run_classify(args: argparse.Namespace) -> int:
     decisions = classifier.classify(messages)
     output_dir = input_path.parent
     write_jsonl(output_dir / "classifications.jsonl", decisions)
+    run_date = _run_dir_date(output_dir)
+    orders_name = f"{run_date.strftime('%d-%m-%Y')}.csv" if run_date else "orders.csv"
     write_orders_csv(
-        output_dir / "orders.csv",
+        output_dir / orders_name,
         messages,
         [item for item in decisions if item.is_order],
     )

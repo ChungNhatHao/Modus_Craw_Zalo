@@ -56,6 +56,22 @@ class OrderDecisionBatch(BaseModel):
     decisions: list[OrderDecision]
 
 
+class OcrLineItem(BaseModel):
+    customer_code: str = ""
+    customer_name: str = ""
+    product_name: str
+    unit: str = ""
+    quantity: float | None = None
+
+
+class ImageOcrResult(BaseModel):
+    message_id: str
+    media_path: str
+    applicable: bool
+    skip_reason: str | None = None
+    items: list[OcrLineItem] = Field(default_factory=list)
+
+
 class CrawlManifest(BaseModel):
     group_name: str
     target_date: date
@@ -68,6 +84,8 @@ class CrawlManifest(BaseModel):
     order_count: int
     media_count: int = 0
     message_image_count: int = 0
+    ocr_image_count: int = 0
+    ocr_item_count: int = 0
     files: dict[str, str]
     google_drive: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)

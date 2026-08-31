@@ -4,12 +4,13 @@ import csv
 import json
 import re
 from collections.abc import Iterable
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-from .models import CleanMessage, OrderDecision, RawMessage
+from .models import CleanMessage, ImageOcrResult, OrderDecision, RawMessage
 
 
 def safe_slug(value: str) -> str:
@@ -134,3 +135,44 @@ def write_orders_csv(
                     "notes": decision.notes or "",
                 }
             )
+
+
+def write_order_ocr_csv(
+    path: Path,
+    group_name: str,
+    target_date: date,
+    ocr_results: Iterable[ImageOcrResult],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    display_date = target_date.strftime("%d-%m-%Y")
+    fieldnames = [
+        "date",
+        "group",
+        "message_id",
+        "media_path",
+        "customer_code",
+        "customer_name",
+        "product_name",
+        "unit",
+        "quantity",
+    ]
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for result in ocr_results:
+            if not result.applicable:
+                continue
+            for item in result.items:
+                writer.writerow(
+                    {
+                        "date": display_date,
+                        "group": group_name,
+                        "message_id": result.message_id,
+                        "media_path": result.media_path,
+                        "customer_code": item.customer_code,
+                        "customer_name": item.customer_name,
+                        "product_name": item.product_name,
+                        "unit": item.unit,
+                        "quantity": item.quantity if item.quantity is not None else "",
+                    }
+                )

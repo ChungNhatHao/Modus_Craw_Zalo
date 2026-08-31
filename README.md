@@ -59,8 +59,13 @@ Có thể dùng cổng khác hoặc không tự mở trang UI:
    các nội dung giao diện không cần thiết.
 7. Gửi nội dung đã làm sạch, metadata và ảnh tin nhắn sang Gemini. Gemini trả JSON
    theo schema cố định; tool xuất các đơn được nhận diện ra CSV.
-8. Ghi phần nội dung chữ vào Google Sheet theo ngày và tải `message_image` lên folder
-   ảnh cùng ngày trong folder Drive đã cấu hình.
+8. Với ảnh đính kèm của các tin đã nhận diện là đơn hàng, gửi từng ảnh sang Gemini để
+   OCR và trích xuất mã khách hàng, tên khách hàng, tên hàng, đơn vị, số lượng. Ảnh thể
+   hiện đơn giá/thành tiền (phiếu nhận hàng) sẽ tự động bị bỏ qua, chỉ trích xuất phiếu
+   đặt hàng thuần.
+9. Ghi phần nội dung chữ vào Google Sheet theo ngày, tải `message_image` lên folder
+   ảnh cùng ngày, và gộp dữ liệu OCR đơn đặt hàng của mọi nhóm trong ngày vào một file
+   Excel `DD-MM-YYYY_OCR.xlsx` trong folder Drive đã cấu hình.
 
 ## Cài đặt
 
@@ -109,8 +114,12 @@ quyền sở hữu/dung lượng của service account.
 
 Tên Sheet/folder lấy theo ngày được chọn để crawl, không lấy theo giờ hệ thống khi
 chạy lại dữ liệu cũ. Nếu chạy lại cùng nhóm và ngày, tool dùng lại tài nguyên đã tạo,
-không thêm lại tin nhắn/ảnh có cùng định danh. Có thể đặt
+không thêm lại tin nhắn/ảnh/dòng OCR có cùng định danh. Có thể đặt
 `GOOGLE_DRIVE_UPLOAD_ENABLED=false` để chỉ lưu output cục bộ.
+
+File Excel `DD-MM-YYYY_OCR.xlsx` chứa dữ liệu OCR từ ảnh phiếu đặt hàng, được tạo
+trong cùng folder output và dùng chung cho mọi nhóm crawl trong ngày đó; mỗi lượt
+crawl chỉ thêm các dòng mới (mã tin nhắn + tên hàng chưa tồn tại) thay vì ghi đè.
 
 ### Cấu hình chi nhánh
 
@@ -131,8 +140,8 @@ Sườn Thảo Điền     → Chi nhánh Thảo Điền
 
 Có thể thêm mỗi tên viết tắt ở một dòng mới. AI chỉ chọn chi nhánh chuẩn có trong
 bảng cấu hình; đơn không đủ bằng chứng được để trống chi nhánh và gắn `Cần kiểm tra`.
-Tên chi nhánh xuất hiện trên UI, trong cột `branch_name` của `orders.csv` và cột
-`Chi nhánh` của Google Sheet theo ngày. Tên nhóm Zalo vẫn được lưu riêng.
+Tên chi nhánh xuất hiện trên UI, trong cột `branch_name` của file `DD-MM-YYYY.csv`
+và cột `Chi nhánh` của Google Sheet theo ngày. Tên nhóm Zalo vẫn được lưu riêng.
 
 Không đưa `.env` lên Git. `.env`, hồ sơ trình duyệt, cache và dữ liệu đầu ra đã được
 thêm vào `.gitignore`.
@@ -205,11 +214,13 @@ output/<ten-nhom>/<YYYY-MM-DD>/<HHMMSS>/
 ├── stylesheets.json         # URL stylesheet và CSS đọc được từ trình duyệt
 ├── clean_messages.jsonl     # Nội dung BeautifulSoup đã làm sạch
 ├── classifications.jsonl    # Quyết định AI cho mọi tin nhắn
-├── orders.csv               # Chỉ các tin được đánh dấu là đơn hàng
+├── DD-MM-YYYY.csv           # Chỉ các tin được đánh dấu là đơn hàng, tên theo ngày crawl
+├── order_ocr.jsonl          # Kết quả OCR ảnh phiếu đặt hàng (nếu có)
+├── DD-MM-YYYY-ocr.csv       # Mã KH, tên KH, tên hàng, đơn vị, số lượng theo ảnh
 └── manifest.json             # Thống kê và cảnh báo của lần chạy
 ```
 
-`orders.csv` dùng UTF-8 BOM để Excel trên Windows đọc tiếng Việt đúng.
+File `DD-MM-YYYY.csv` và `DD-MM-YYYY-ocr.csv` dùng UTF-8 BOM để Excel trên Windows đọc tiếng Việt đúng.
 
 ## Khi giao diện Zalo thay đổi
 
