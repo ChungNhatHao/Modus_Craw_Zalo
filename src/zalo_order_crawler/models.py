@@ -43,6 +43,7 @@ class OrderDecision(BaseModel):
     data_confidence: float = Field(ge=0, le=1)
     needs_review: bool = False
     reason: str
+    branch_name: str | None = None
     customer_name: str | None = None
     phone: str | None = None
     address: str | None = None

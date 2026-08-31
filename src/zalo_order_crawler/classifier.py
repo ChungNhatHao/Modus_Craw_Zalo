@@ -5,6 +5,7 @@ import json
 import time
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Mapping
 
 from google import genai
 from google.genai import types
@@ -12,7 +13,7 @@ from google.genai import types
 from .models import CleanMessage, OrderDecision, OrderDecisionBatch
 
 
-_PROMPT_VERSION = "order-classifier-v3-confidence"
+_PROMPT_VERSION = "order-classifier-v4-branch-config"
 MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024
 _SYSTEM_INSTRUCTION = """
 Bạn là bộ phân loại tin nhắn bán hàng tiếng Việt. Nhiệm vụ là xác định từng tin nhắn
@@ -36,9 +37,15 @@ Phải trả đúng một decision cho mỗi message_id đầu vào, giữ nguy�
 thêm message_id mới. reason ngắn gọn bằng tiếng Việt. Chỉ điền thông tin đơn hàng nếu
 nội dung/ngữ cảnh nêu rõ; nếu không thì để null hoặc danh sách rỗng.
 
+Nếu có branch_config, với đơn hàng hãy đối chiếu tên/mã chi nhánh xuất hiện trong
+nội dung hoặc ảnh với cấu hình. branch_name chỉ được nhận đúng một giá trị chi nhánh
+chuẩn trong cấu hình. Không đủ bằng chứng hoặc không khớp cấu hình thì để null; không
+tự suy đoán từ tên người gửi hay tên nhóm Zalo. Với tin không phải đơn, để null.
+
 confidence là mức tin cậy 0..1 rằng quyết định is_order đúng. data_confidence là mức
-tin cậy 0..1 rằng các trường customer_name, phone, address, products, quantities và
-notes đã được trích xuất đúng từ bằng chứng rõ ràng. Với tin không phải đơn, đặt
+tin cậy 0..1 rằng các trường branch_name, customer_name, phone, address, products,
+quantities và notes đã được trích xuất đúng từ bằng chứng rõ ràng. Với tin không phải
+đơn, đặt
 data_confidence=0. needs_review sẽ được hệ thống tính lại sau phản hồi.
 """.strip()
 
@@ -52,6 +59,7 @@ class GeminiOrderClassifier:
         batch_size: int,
         cache_dir: Path,
         media_base_dir: Path | None = None,
+        branch_mappings: Mapping[str, str] | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("Thiếu GEMINI_API_KEY.")
@@ -62,6 +70,11 @@ class GeminiOrderClassifier:
         self.batch_size = batch_size
         self.cache_dir = cache_dir
         self.media_base_dir = media_base_dir
+        self.branch_mappings = {
+            self._normalise_branch_key(alias): canonical.strip()
+            for alias, canonical in (branch_mappings or {}).items()
+            if alias.strip() and canonical.strip()
+        }
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def classify(self, messages: Iterable[CleanMessage]) -> list[OrderDecision]:
@@ -91,7 +104,10 @@ class GeminiOrderClassifier:
         ]
         prompt = (
             "Phân loại toàn bộ các tin nhắn JSON sau. Trả đúng một kết quả cho mỗi "
-            "message_id:\n<messages_json>\n"
+            "message_id. Chỉ dùng các ánh xạ chi nhánh được cung cấp:\n"
+            "<branch_config_json>\n"
+            + json.dumps(self.branch_mappings, ensure_ascii=False)
+            + "\n</branch_config_json>\n<messages_json>\n"
             + json.dumps(payload, ensure_ascii=False)
             + "\n</messages_json>"
         )
@@ -193,9 +209,8 @@ class GeminiOrderClassifier:
             raise ValueError(f"Không tìm thấy file ảnh: {path}")
         return path
 
-    @staticmethod
     def _validate_batch(
-        decisions: list[OrderDecision], messages: list[CleanMessage]
+        self, decisions: list[OrderDecision], messages: list[CleanMessage]
     ) -> list[OrderDecision]:
         expected = [message.message_id for message in messages]
         by_id: dict[str, OrderDecision] = {}
@@ -205,13 +220,23 @@ class GeminiOrderClassifier:
         missing = [message_id for message_id in expected if message_id not in by_id]
         if missing:
             raise ValueError(f"Gemini thiếu decision cho message_id: {', '.join(missing[:5])}")
-        return [
-            GeminiOrderClassifier._apply_review_policy(by_id[message_id])
-            for message_id in expected
-        ]
+        results: list[OrderDecision] = []
+        for message_id in expected:
+            decision = by_id[message_id]
+            branch_name = self._canonical_branch_name(decision.branch_name)
+            decision = decision.model_copy(update={"branch_name": branch_name})
+            results.append(
+                self._apply_review_policy(
+                    decision,
+                    require_branch=bool(self.branch_mappings),
+                )
+            )
+        return results
 
     @staticmethod
-    def _apply_review_policy(decision: OrderDecision) -> OrderDecision:
+    def _apply_review_policy(
+        decision: OrderDecision, *, require_branch: bool = False
+    ) -> OrderDecision:
         data_confidence = decision.data_confidence
         if not decision.is_order:
             data_confidence = 0
@@ -225,6 +250,7 @@ class GeminiOrderClassifier:
         needs_review = (
             decision.confidence < 0.9
             or (decision.is_order and data_confidence < 0.9)
+            or (decision.is_order and require_branch and not decision.branch_name)
         )
         return decision.model_copy(
             update={
@@ -232,3 +258,19 @@ class GeminiOrderClassifier:
                 "needs_review": needs_review,
             }
         )
+
+    def _canonical_branch_name(self, value: str | None) -> str | None:
+        if not value or not self.branch_mappings:
+            return None
+        key = self._normalise_branch_key(value)
+        if key in self.branch_mappings:
+            return self.branch_mappings[key]
+        canonical_by_key = {
+            self._normalise_branch_key(canonical): canonical
+            for canonical in self.branch_mappings.values()
+        }
+        return canonical_by_key.get(key)
+
+    @staticmethod
+    def _normalise_branch_key(value: str) -> str:
+        return " ".join(value.casefold().split())

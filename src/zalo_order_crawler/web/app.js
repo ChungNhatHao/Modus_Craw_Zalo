@@ -147,6 +147,7 @@ function renderResults(results, crawlState) {
     const driveLinks = [
       [drive.sheet, "Mở Google Sheet"],
       [drive.image_folder, "Mở thư mục ảnh"],
+      [drive.branch_config, "Mở cấu hình chi nhánh"],
     ];
     driveLinks.forEach(([resource, label]) => {
       if (!resource || !resource.url) return;
@@ -369,6 +370,7 @@ function renderAiMessage(message) {
   }
 
   const details = [
+    ["Chi nhánh", decision.branch_name],
     ["Khách hàng", decision.customer_name],
     ["Điện thoại", decision.phone],
     ["Địa chỉ", decision.address],

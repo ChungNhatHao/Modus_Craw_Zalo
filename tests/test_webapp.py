@@ -167,6 +167,7 @@ def test_run_result_returns_ai_decision_and_safe_asset_url(tmp_path: Path) -> No
                 "data_confidence": 0.93,
                 "needs_review": False,
                 "reason": "Ảnh chứa phiếu đặt hàng.",
+                "branch_name": "Chi nhánh Thảo Điền",
                 "products": ["Cải thìa"],
                 "quantities": ["2 kg"],
             }
@@ -181,6 +182,10 @@ def test_run_result_returns_ai_decision_and_safe_asset_url(tmp_path: Path) -> No
     assert result["summary"]["orders"] == 1
     assert result["messages"][0]["decision"]["products"] == ["Cải thìa"]
     assert result["messages"][0]["decision"]["data_confidence"] == 0.93
+    assert (
+        result["messages"][0]["decision"]["branch_name"]
+        == "Chi nhánh Thảo Điền"
+    )
     assert result["messages"][0]["media"][0]["url"].startswith("/api/run-asset?")
     assert result["google_drive"]["sheet"]["id"] == "sheet-id"
     assert asset == image_path

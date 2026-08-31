@@ -93,3 +93,48 @@ def test_review_policy_caps_incomplete_order_and_requires_review() -> None:
 
     assert result.data_confidence == 0.75
     assert result.needs_review is True
+
+
+def test_branch_name_is_normalised_from_google_sheet_config(tmp_path: Path) -> None:
+    classifier = GeminiOrderClassifier(
+        api_key="test-key",
+        model="test-model",
+        batch_size=10,
+        cache_dir=tmp_path / "cache",
+        branch_mappings={"S6": "Chi nhánh Phạm Văn Đồng"},
+    )
+    decision = OrderDecision(
+        message_id="m1",
+        is_order=True,
+        confidence=0.98,
+        data_confidence=0.95,
+        reason="Có đơn",
+        branch_name="s6",
+        products=["rau"],
+        quantities=["2 kg"],
+    )
+
+    results = classifier._validate_batch(
+        [decision], [CleanMessage(message_id="m1", sequence=1, content="S6 thêm rau")]
+    )
+
+    assert results[0].branch_name == "Chi nhánh Phạm Văn Đồng"
+    assert results[0].needs_review is False
+
+
+def test_missing_configured_branch_requires_review() -> None:
+    decision = OrderDecision(
+        message_id="m1",
+        is_order=True,
+        confidence=0.98,
+        data_confidence=0.95,
+        reason="Có đơn",
+        products=["rau"],
+        quantities=["2 kg"],
+    )
+
+    result = GeminiOrderClassifier._apply_review_policy(
+        decision, require_branch=True
+    )
+
+    assert result.needs_review is True

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .models import CleanMessage, MediaAsset
+from .models import CleanMessage, MediaAsset, OrderDecision
 from .storage import safe_slug
 
 
@@ -27,8 +27,17 @@ GOOGLE_SCOPES = (
 )
 SHEET_MARKER_KEY = "zaloOrderCrawler"
 SHEET_MARKER_VALUE = "daily-text-v1"
+BRANCH_CONFIG_MARKER_VALUE = "branch-config-v1"
+BRANCH_CONFIG_NAME = "Cấu hình chi nhánh"
+BRANCH_CONFIG_TAB = "Chi nhánh"
+BRANCH_CONFIG_HEADERS = ("Tên nhận diện", "Chi nhánh chuẩn")
+DEFAULT_BRANCH_MAPPINGS = (
+    ("S6", "Chi nhánh Phạm Văn Đồng"),
+    ("Tân Phú", "Chi nhánh Tân Phú"),
+    ("Sườn Thảo Điền", "Chi nhánh Thảo Điền"),
+)
 IMAGE_MARKER_KEY = "zaloCrawlerImageKey"
-SHEET_HEADERS = (
+LEGACY_SHEET_HEADERS = (
     "Ngày",
     "Nhóm",
     "Mã tin nhắn",
@@ -39,6 +48,7 @@ SHEET_HEADERS = (
     "Nội dung",
     "Loại tin",
 )
+SHEET_HEADERS = (*LEGACY_SHEET_HEADERS, "Chi nhánh")
 _MEDIA_PLACEHOLDERS = {"[hình ảnh]", "[image]"}
 _DRIVE_ID_PATTERN = re.compile(r"^[0-9A-Za-z_-]+$")
 
@@ -52,6 +62,12 @@ class DriveResource:
     id: str
     name: str
     url: str
+
+
+@dataclass(frozen=True)
+class BranchConfig:
+    resource: DriveResource
+    mappings: dict[str, str]
 
 
 class GoogleDriveOutputPublisher:
@@ -171,10 +187,16 @@ class GoogleDriveOutputPublisher:
         group_name: str,
         target_date: date,
         messages: Iterable[CleanMessage],
+        decisions: Iterable[OrderDecision] = (),
     ) -> dict[str, Any]:
         run_dir = run_dir.resolve()
         message_list = list(messages)
-        text_rows = self._text_rows(group_name, target_date, message_list)
+        text_rows = self._text_rows(
+            group_name,
+            target_date,
+            message_list,
+            decisions,
+        )
         image_assets = self._message_images(run_dir, message_list)
         daily_name = target_date.strftime("%d-%m-%Y")
         output: dict[str, Any] = {}
@@ -220,8 +242,14 @@ class GoogleDriveOutputPublisher:
         group_name: str,
         target_date: date,
         messages: Iterable[CleanMessage],
+        decisions: Iterable[OrderDecision] = (),
     ) -> list[list[Any]]:
         display_date = target_date.strftime("%d-%m-%Y")
+        branch_by_message_id = {
+            decision.message_id: decision.branch_name or ""
+            for decision in decisions
+            if decision.is_order
+        }
         rows: list[list[Any]] = []
         for message in messages:
             content = message.content.strip()
@@ -238,6 +266,7 @@ class GoogleDriveOutputPublisher:
                     message.direction,
                     content,
                     message.message_type,
+                    branch_by_message_id.get(message.message_id, ""),
                 ]
             )
         return rows
@@ -277,6 +306,158 @@ class GoogleDriveOutputPublisher:
         if not candidate.is_file():
             raise GoogleDriveOutputError(f"Không tìm thấy ảnh output: {media_path}")
         return candidate
+
+    def ensure_branch_config(self) -> BranchConfig:
+        marker_query = (
+            f"appProperties has {{ key='{SHEET_MARKER_KEY}' and "
+            f"value='{BRANCH_CONFIG_MARKER_VALUE}' }}"
+        )
+        resource = self._find_resource(
+            self.parent_folder_id,
+            BRANCH_CONFIG_NAME,
+            GOOGLE_SHEET_MIME,
+            extra_query=marker_query,
+        )
+        created = resource is None
+        if resource is None:
+            resource = self._create_resource(
+                BRANCH_CONFIG_NAME,
+                GOOGLE_SHEET_MIME,
+                self.parent_folder_id,
+                app_properties={SHEET_MARKER_KEY: BRANCH_CONFIG_MARKER_VALUE},
+            )
+
+        sheet_id, sheet_title, row_count = self._first_sheet(resource.id)
+        if created and sheet_title != BRANCH_CONFIG_TAB:
+            self._rename_sheet(resource.id, sheet_id, BRANCH_CONFIG_TAB)
+            sheet_title = BRANCH_CONFIG_TAB
+
+        header_range = f"{self._a1_sheet(sheet_title)}!A1:B1"
+        header_values = self._get_values(resource.id, header_range)
+        if not header_values:
+            seed_rows = [list(BRANCH_CONFIG_HEADERS), *map(list, DEFAULT_BRANCH_MAPPINGS)]
+            seed_range = f"{self._a1_sheet(sheet_title)}!A1:B{len(seed_rows)}"
+            self._request_json(
+                "PUT",
+                f"{SHEETS_API}/spreadsheets/{quote(resource.id, safe='')}/values/"
+                f"{quote(seed_range, safe='')}",
+                params={"valueInputOption": "RAW"},
+                json={"majorDimension": "ROWS", "values": seed_rows},
+            )
+            self._format_branch_config(resource.id, sheet_id)
+        else:
+            existing_header = [str(value).strip() for value in header_values[0]]
+            if existing_header != list(BRANCH_CONFIG_HEADERS):
+                raise GoogleDriveOutputError(
+                    f"Sheet cấu hình {resource.id} phải có header "
+                    f"{', '.join(BRANCH_CONFIG_HEADERS)}."
+                )
+
+        max_row = min(max(row_count, len(DEFAULT_BRANCH_MAPPINGS) + 1), 10_000)
+        data_range = f"{self._a1_sheet(sheet_title)}!A2:B{max_row}"
+        mappings = self._parse_branch_mappings(
+            self._get_values(resource.id, data_range)
+        )
+        return BranchConfig(resource=resource, mappings=mappings)
+
+    def _format_branch_config(self, spreadsheet_id: str, sheet_id: int) -> None:
+        self._sheets_batch_update(
+            spreadsheet_id,
+            [
+                {
+                    "updateSheetProperties": {
+                        "properties": {
+                            "sheetId": sheet_id,
+                            "gridProperties": {"frozenRowCount": 1},
+                        },
+                        "fields": "gridProperties.frozenRowCount",
+                    }
+                },
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 0,
+                            "endRowIndex": 1,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": 2,
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "backgroundColorStyle": {
+                                    "rgbColor": {
+                                        "red": 0.9,
+                                        "green": 0.9,
+                                        "blue": 0.9,
+                                    }
+                                },
+                                "textFormat": {"bold": True},
+                            }
+                        },
+                        "fields": (
+                            "userEnteredFormat(backgroundColorStyle,textFormat)"
+                        ),
+                    }
+                },
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "COLUMNS",
+                            "startIndex": 0,
+                            "endIndex": 1,
+                        },
+                        "properties": {"pixelSize": 180},
+                        "fields": "pixelSize",
+                    }
+                },
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "COLUMNS",
+                            "startIndex": 1,
+                            "endIndex": 2,
+                        },
+                        "properties": {"pixelSize": 260},
+                        "fields": "pixelSize",
+                    }
+                },
+            ],
+        )
+
+    @classmethod
+    def _parse_branch_mappings(cls, rows: Iterable[list[Any]]) -> dict[str, str]:
+        mappings: dict[str, str] = {}
+        canonical_by_key: dict[str, str] = {}
+        display_aliases: dict[str, str] = {}
+        for row_number, row in enumerate(rows, start=2):
+            alias = str(row[0]).strip() if row else ""
+            canonical = str(row[1]).strip() if len(row) >= 2 else ""
+            if not alias and not canonical:
+                continue
+            if not alias or not canonical:
+                raise GoogleDriveOutputError(
+                    f"Cấu hình chi nhánh dòng {row_number} phải có đủ hai cột."
+                )
+            key = cls._normalise_branch_key(alias)
+            if key in canonical_by_key and canonical_by_key[key] != canonical:
+                raise GoogleDriveOutputError(
+                    f"Tên nhận diện {display_aliases[key]!r} bị ánh xạ tới nhiều "
+                    "chi nhánh khác nhau."
+                )
+            mappings[alias] = canonical
+            canonical_by_key[key] = canonical
+            display_aliases[key] = alias
+        if not mappings:
+            raise GoogleDriveOutputError(
+                "Google Sheet cấu hình chi nhánh chưa có ánh xạ nào."
+            )
+        return mappings
+
+    @staticmethod
+    def _normalise_branch_key(value: str) -> str:
+        return " ".join(value.casefold().split())
 
     def _ensure_daily_sheet(self, name: str) -> tuple[DriveResource, str, int]:
         marker_query = (
@@ -429,16 +610,28 @@ class GoogleDriveOutputPublisher:
         sheet_id: int,
         sheet_title: str,
     ) -> None:
-        header_range = f"{self._a1_sheet(sheet_title)}!A1:I1"
+        header_range = f"{self._a1_sheet(sheet_title)}!A1:J1"
         values = self._get_values(spreadsheet_id, header_range)
         if values:
             existing = [str(value) for value in values[0]]
+            if existing == list(SHEET_HEADERS):
+                return
+            if existing == list(LEGACY_SHEET_HEADERS):
+                self._request_json(
+                    "PUT",
+                    f"{SHEETS_API}/spreadsheets/"
+                    f"{quote(spreadsheet_id, safe='')}/values/"
+                    f"{quote(f'{self._a1_sheet(sheet_title)}!J1', safe='')}",
+                    params={"valueInputOption": "RAW"},
+                    json={"majorDimension": "ROWS", "values": [["Chi nhánh"]]},
+                )
+                self._format_migrated_branch_column(spreadsheet_id, sheet_id)
+                return
             if existing != list(SHEET_HEADERS):
                 raise GoogleDriveOutputError(
                     f"Sheet {spreadsheet_id} đã có header khác cấu trúc crawler; "
                     "tool dừng để không ghi đè dữ liệu."
                 )
-            return
 
         self._request_json(
             "PUT",
@@ -550,7 +743,7 @@ class GoogleDriveOutputPublisher:
         if not pending:
             return 0
 
-        append_range = f"{self._a1_sheet(sheet_title)}!A:I"
+        append_range = f"{self._a1_sheet(sheet_title)}!A:J"
         self._request_json(
             "POST",
             f"{SHEETS_API}/spreadsheets/{quote(spreadsheet_id, safe='')}/values/"
@@ -584,6 +777,51 @@ class GoogleDriveOutputPublisher:
             "POST",
             f"{SHEETS_API}/spreadsheets/{quote(spreadsheet_id, safe='')}:batchUpdate",
             json={"requests": requests},
+        )
+
+    def _format_migrated_branch_column(
+        self, spreadsheet_id: str, sheet_id: int
+    ) -> None:
+        self._sheets_batch_update(
+            spreadsheet_id,
+            [
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 0,
+                            "endRowIndex": 1,
+                            "startColumnIndex": 9,
+                            "endColumnIndex": 10,
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "backgroundColorStyle": {
+                                    "rgbColor": {
+                                        "red": 0.035,
+                                        "green": 0.408,
+                                        "blue": 1.0,
+                                    }
+                                },
+                                "textFormat": {
+                                    "bold": True,
+                                    "foregroundColorStyle": {
+                                        "rgbColor": {
+                                            "red": 1.0,
+                                            "green": 1.0,
+                                            "blue": 1.0,
+                                        }
+                                    },
+                                },
+                            }
+                        },
+                        "fields": (
+                            "userEnteredFormat(backgroundColorStyle,textFormat)"
+                        ),
+                    }
+                },
+                self._column_width_requests(sheet_id)[9],
+            ],
         )
 
     def _upload_unique_image(
@@ -706,7 +944,7 @@ class GoogleDriveOutputPublisher:
 
     @staticmethod
     def _column_width_requests(sheet_id: int) -> list[dict[str, Any]]:
-        widths = (96, 180, 220, 60, 160, 90, 110, 420, 90)
+        widths = (96, 180, 220, 60, 160, 90, 110, 420, 90, 200)
         return [
             {
                 "updateDimensionProperties": {

@@ -57,6 +57,7 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         raise ValueError("Thiếu GEMINI_API_KEY trong .env. Dùng lệnh 'crawl' nếu chưa muốn chạy AI.")
 
     drive_publisher = None
+    branch_config = None
     if settings.google_drive_upload_enabled:
         print("Đang kiểm tra quyền ghi Google Drive...")
         drive_publisher = GoogleDriveOutputPublisher.from_default_credentials(
@@ -65,6 +66,11 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         )
         destination = drive_publisher.verify_destination()
         print(f"Google Drive output: {destination.name}")
+        branch_config = drive_publisher.ensure_branch_config()
+        print(
+            "Cấu hình chi nhánh: "
+            f"{len(branch_config.mappings)} ánh xạ; {branch_config.resource.url}"
+        )
 
     started_at = datetime.now(settings.timezone)
     run_name = started_at.strftime("%H%M%S")
@@ -132,6 +138,7 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
             batch_size=settings.gemini_batch_size,
             cache_dir=settings.project_dir / ".cache" / "gemini",
             media_base_dir=run_dir,
+            branch_mappings=(branch_config.mappings if branch_config else {}),
         )
         decisions = classifier.classify(cleaned)
         write_jsonl(classifications_jsonl, decisions)
@@ -160,19 +167,29 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         for item in message.media
     )
     google_drive: dict[str, object] = {}
+    if branch_config is not None:
+        google_drive["branch_config"] = {
+            "id": branch_config.resource.id,
+            "name": branch_config.resource.name,
+            "url": branch_config.resource.url,
+            "mappings_loaded": len(branch_config.mappings),
+        }
     drive_error: Exception | None = None
     if drive_publisher is not None:
         print("Đang lưu tin nhắn và hình ảnh lên Google Drive...")
         try:
-            google_drive = drive_publisher.publish(
-                run_dir=run_dir,
-                group_name=settings.group_name,
-                target_date=target_date,
-                messages=cleaned,
+            google_drive.update(
+                drive_publisher.publish(
+                    run_dir=run_dir,
+                    group_name=settings.group_name,
+                    target_date=target_date,
+                    messages=cleaned,
+                    decisions=decisions,
+                )
             )
         except Exception as exc:
             drive_error = exc
-            google_drive = {"error": str(exc)}
+            google_drive["error"] = str(exc)
 
     warnings = list(artifacts.warnings)
     if drive_error is not None:
@@ -207,6 +224,9 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
     image_folder = google_drive.get("image_folder")
     if isinstance(image_folder, dict):
         print(f"Thư mục ảnh Google Drive: {image_folder.get('url', '')}")
+    branch_config_output = google_drive.get("branch_config")
+    if isinstance(branch_config_output, dict):
+        print(f"Cấu hình chi nhánh: {branch_config_output.get('url', '')}")
     for warning in warnings:
         print(f"Cảnh báo: {warning}")
     print("Hoàn tất và đã cập nhật output Google Drive.")
@@ -240,12 +260,21 @@ def _run_classify(args: argparse.Namespace) -> int:
         raise ValueError("Thiếu GEMINI_API_KEY trong .env.")
     input_path = Path(args.input).resolve()
     messages = _read_clean_messages(input_path)
+    branch_mappings: dict[str, str] = {}
+    if settings.google_drive_upload_enabled:
+        publisher = GoogleDriveOutputPublisher.from_default_credentials(
+            settings.google_drive_parent_folder_id,
+            project_dir=settings.project_dir,
+        )
+        publisher.verify_destination()
+        branch_mappings = publisher.ensure_branch_config().mappings
     classifier = GeminiOrderClassifier(
         api_key=settings.gemini_api_key,
         model=settings.gemini_model,
         batch_size=settings.gemini_batch_size,
         cache_dir=settings.project_dir / ".cache" / "gemini",
         media_base_dir=input_path.parent,
+        branch_mappings=branch_mappings,
     )
     decisions = classifier.classify(messages)
     output_dir = input_path.parent
@@ -256,6 +285,21 @@ def _run_classify(args: argparse.Namespace) -> int:
         [item for item in decisions if item.is_order],
     )
     print(f"Đã phân loại {len(messages)} tin; nhận diện {sum(item.is_order for item in decisions)} đơn.")
+    return 0
+
+
+def _run_branch_config(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    publisher = GoogleDriveOutputPublisher.from_default_credentials(
+        settings.google_drive_parent_folder_id,
+        project_dir=settings.project_dir,
+    )
+    destination = publisher.verify_destination()
+    config = publisher.ensure_branch_config()
+    print(f"Google Drive output: {destination.name}")
+    print(f"Google Sheet cấu hình: {config.resource.url}")
+    for alias, branch_name in config.mappings.items():
+        print(f"- {alias} = {branch_name}")
     return 0
 
 
@@ -306,6 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     classify.add_argument("--input", required=True, help="Đường dẫn clean_messages.jsonl.")
 
+    subparsers.add_parser(
+        "branch-config",
+        help="Tạo hoặc kiểm tra Google Sheet cấu hình chi nhánh.",
+    )
+
     ui = subparsers.add_parser("ui", help="Mở giao diện web cục bộ.")
     ui.add_argument("--port", type=int, default=8765, help="Cổng local, mặc định 8765.")
     ui.add_argument(
@@ -330,6 +379,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_crawl(args, with_ai=False)
         if args.command == "classify":
             return _run_classify(args)
+        if args.command == "branch-config":
+            return _run_branch_config(args)
         if args.command == "ui":
             return _run_ui(args)
         if args.command == "_auth-session":

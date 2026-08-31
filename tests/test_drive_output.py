@@ -9,7 +9,7 @@ from zalo_order_crawler.drive_output import (
     GoogleDriveOutputError,
     GoogleDriveOutputPublisher,
 )
-from zalo_order_crawler.models import CleanMessage, MediaAsset
+from zalo_order_crawler.models import CleanMessage, MediaAsset, OrderDecision
 
 
 class FakeResponse:
@@ -146,6 +146,7 @@ def test_publish_splits_text_and_message_images_by_selected_date(tmp_path: Path)
             "incoming",
             "Chốt 2 áo",
             "text",
+            "",
         ]
     ]
     assert publisher.uploaded == [("Nhóm A", "image-1", "order.jpg")]
@@ -164,8 +165,8 @@ def test_append_unique_text_rows_skips_existing_group_message_key() -> None:
         or {}
     )
     rows = [
-        ["30-08-2026", "Nhóm A", "m1", 1, "", "", "incoming", "Cũ", "text"],
-        ["30-08-2026", "Nhóm B", "m2", 2, "", "", "incoming", "Mới", "text"],
+        ["30-08-2026", "Nhóm A", "m1", 1, "", "", "incoming", "Cũ", "text", ""],
+        ["30-08-2026", "Nhóm B", "m2", 2, "", "", "incoming", "Mới", "text", ""],
     ]
 
     added = publisher._append_unique_text_rows(
@@ -184,6 +185,57 @@ def test_media_path_cannot_escape_run_directory(tmp_path: Path) -> None:
 
     with pytest.raises(GoogleDriveOutputError, match="ngoài thư mục"):
         GoogleDriveOutputPublisher._resolve_media_path(run_dir, "../outside.jpg")
+
+
+def test_text_rows_include_branch_only_for_order_decisions() -> None:
+    messages = [
+        CleanMessage(message_id="m1", sequence=1, content="S6 thêm 2 kg rau"),
+        CleanMessage(message_id="m2", sequence=2, content="Dạ"),
+    ]
+    decisions = [
+        OrderDecision(
+            message_id="m1",
+            is_order=True,
+            confidence=0.98,
+            data_confidence=0.95,
+            reason="Đơn bổ sung",
+            branch_name="Chi nhánh Phạm Văn Đồng",
+            products=["rau"],
+            quantities=["2 kg"],
+        ),
+        OrderDecision(
+            message_id="m2",
+            is_order=False,
+            confidence=0.99,
+            data_confidence=0,
+            reason="Xã giao",
+            branch_name="Chi nhánh Tân Phú",
+        ),
+    ]
+
+    rows = GoogleDriveOutputPublisher._text_rows(
+        "Rau SMO", date(2026, 8, 30), messages, decisions
+    )
+
+    assert rows[0][-1] == "Chi nhánh Phạm Văn Đồng"
+    assert rows[1][-1] == ""
+
+
+def test_parse_branch_mappings_preserves_aliases_and_rejects_conflicts() -> None:
+    rows = [
+        ["S6", "Chi nhánh Phạm Văn Đồng"],
+        ["Tân Phú", "Chi nhánh Tân Phú"],
+    ]
+
+    assert GoogleDriveOutputPublisher._parse_branch_mappings(rows) == {
+        "S6": "Chi nhánh Phạm Văn Đồng",
+        "Tân Phú": "Chi nhánh Tân Phú",
+    }
+
+    with pytest.raises(GoogleDriveOutputError, match="nhiều chi nhánh"):
+        GoogleDriveOutputPublisher._parse_branch_mappings(
+            [["S6", "Chi nhánh A"], [" s6 ", "Chi nhánh B"]]
+        )
 
 
 def test_verify_destination_requires_permission_to_add_files() -> None:

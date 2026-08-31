@@ -31,6 +31,8 @@ Quy trình sử dụng:
 8. Tin nhắn chữ được thêm vào Google Sheet `DD-MM-YYYY`; ảnh tin nhắn được tải lên
    folder `DD-MM-YYYY_image`. Link mở Sheet và folder ảnh xuất hiện ở kết quả từng
    nhóm trên UI.
+9. Chi nhánh của từng đơn được đối chiếu với Google Sheet `Cấu hình chi nhánh`.
+   Link mở bảng cấu hình cũng xuất hiện trên UI để có thể bổ sung tên viết tắt.
 
 Mỗi đơn có hai chỉ số riêng: **Nhận diện đơn** cho quyết định đây có phải đơn hàng
 hay không và **Thông tin đơn** cho độ tin cậy của dữ liệu đã trích xuất. Đơn dưới 90%
@@ -109,6 +111,28 @@ Tên Sheet/folder lấy theo ngày được chọn để crawl, không lấy the
 chạy lại dữ liệu cũ. Nếu chạy lại cùng nhóm và ngày, tool dùng lại tài nguyên đã tạo,
 không thêm lại tin nhắn/ảnh có cùng định danh. Có thể đặt
 `GOOGLE_DRIVE_UPLOAD_ENABLED=false` để chỉ lưu output cục bộ.
+
+### Cấu hình chi nhánh
+
+Tạo hoặc kiểm tra Google Sheet cấu hình trong folder Drive output:
+
+```bash
+.venv/bin/zalo-order-crawler branch-config
+```
+
+Sheet `Cấu hình chi nhánh` có hai cột `Tên nhận diện` và `Chi nhánh chuẩn`, được tạo
+sẵn với các ánh xạ:
+
+```text
+S6                 → Chi nhánh Phạm Văn Đồng
+Tân Phú            → Chi nhánh Tân Phú
+Sườn Thảo Điền     → Chi nhánh Thảo Điền
+```
+
+Có thể thêm mỗi tên viết tắt ở một dòng mới. AI chỉ chọn chi nhánh chuẩn có trong
+bảng cấu hình; đơn không đủ bằng chứng được để trống chi nhánh và gắn `Cần kiểm tra`.
+Tên chi nhánh xuất hiện trên UI, trong cột `branch_name` của `orders.csv` và cột
+`Chi nhánh` của Google Sheet theo ngày. Tên nhóm Zalo vẫn được lưu riêng.
 
 Không đưa `.env` lên Git. `.env`, hồ sơ trình duyệt, cache và dữ liệu đầu ra đã được
 thêm vào `.gitignore`.

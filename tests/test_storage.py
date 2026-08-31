@@ -29,6 +29,7 @@ def test_write_orders_csv_has_excel_bom_and_vietnamese(tmp_path: Path) -> None:
         data_confidence=0.87,
         needs_review=True,
         reason="Có ý định chốt",
+        branch_name="Chi nhánh Tân Phú",
         products=["áo"],
         quantities=["2"],
     )
@@ -42,4 +43,6 @@ def test_write_orders_csv_has_excel_bom_and_vietnamese(tmp_path: Path) -> None:
     assert "assets/m1.jpg" in payload.decode("utf-8-sig")
     assert "order_confidence_percent" in payload.decode("utf-8-sig")
     assert "data_confidence_percent" in payload.decode("utf-8-sig")
+    assert "branch_name" in payload.decode("utf-8-sig")
+    assert "Chi nhánh Tân Phú" in payload.decode("utf-8-sig")
     assert ",95.0,0.87,87.0,True," in payload.decode("utf-8-sig")
