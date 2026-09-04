@@ -138,3 +138,44 @@ def test_missing_configured_branch_requires_review() -> None:
     )
 
     assert result.needs_review is True
+
+
+def test_image_order_defers_product_completeness_review_to_ocr(
+    tmp_path: Path,
+) -> None:
+    classifier = GeminiOrderClassifier(
+        api_key="test-key",
+        model="test-model",
+        batch_size=10,
+        cache_dir=tmp_path / "cache",
+        branch_mappings={"S6": "Chi nhánh Phạm Văn Đồng"},
+    )
+    decision = OrderDecision(
+        message_id="m1",
+        is_order=True,
+        confidence=0.95,
+        data_confidence=0.8,
+        reason="Ảnh là phiếu đặt hàng.",
+        branch_name="S6",
+        products=["Cà chua", "Cần tàu"],
+        quantities=["2"],
+    )
+    message = CleanMessage(
+        message_id="m1",
+        sequence=1,
+        content="[Hình ảnh]",
+        message_type="image",
+        media=[
+            MediaAsset(
+                path="assets/m1.jpg",
+                mime_type="image/jpeg",
+                role="message_image",
+            )
+        ],
+    )
+
+    result = classifier._validate_batch([decision], [message])[0]
+
+    assert result.branch_name == "Chi nhánh Phạm Văn Đồng"
+    assert result.data_confidence == 0.8
+    assert result.needs_review is False

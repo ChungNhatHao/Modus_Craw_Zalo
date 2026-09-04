@@ -87,4 +87,34 @@ def test_write_order_ocr_csv_skips_non_applicable_results(tmp_path: Path) -> Non
     text = payload.decode("utf-8-sig")
     assert "Rau muống" in text
     assert "30-08-2026" in text
+    assert "image_quality_percent" in text
+    assert ",100.0,False,False," in text
     assert "m2" not in text
+
+
+def test_write_order_ocr_csv_keeps_low_quality_result_without_items(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "order_ocr.csv"
+
+    write_order_ocr_csv(
+        output,
+        "Rau SMO",
+        date(2026, 8, 30),
+        [
+            ImageOcrResult(
+                message_id="m1",
+                media_path="assets/m1.jpg",
+                applicable=False,
+                image_quality_score=0.6,
+                image_quality_affects_output=True,
+                image_quality_reason="Ảnh mờ",
+                needs_review=True,
+            )
+        ],
+    )
+
+    text = output.read_text(encoding="utf-8-sig")
+    assert "m1" in text
+    assert "60.0" in text
+    assert "Ảnh mờ" in text

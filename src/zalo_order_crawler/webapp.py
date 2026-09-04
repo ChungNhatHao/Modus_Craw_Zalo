@@ -363,6 +363,13 @@ class AppManager:
             for item in _read_jsonl(run_dir / "classifications.jsonl")
             if item.get("message_id")
         }
+        ocr_results_by_message: dict[str, list[dict[str, Any]]] = {}
+        ocr_path = run_dir / "order_ocr.jsonl"
+        ocr_values = _read_jsonl(ocr_path) if ocr_path.is_file() else []
+        for item in ocr_values:
+            message_id = str(item.get("message_id") or "")
+            if message_id:
+                ocr_results_by_message.setdefault(message_id, []).append(item)
 
         rendered_messages: list[dict[str, Any]] = []
         for message in sorted(messages, key=lambda item: int(item.get("sequence", 0))):
@@ -395,6 +402,9 @@ class AppManager:
                     "message_type": message.get("message_type", "text"),
                     "media": media_items,
                     "decision": decisions.get(message.get("message_id")),
+                    "ocr_results": ocr_results_by_message.get(
+                        str(message.get("message_id") or ""), []
+                    ),
                 }
             )
 
@@ -409,6 +419,10 @@ class AppManager:
                 "orders": manifest.get("order_count", 0),
                 "media": manifest.get("media_count", 0),
                 "message_images": manifest.get("message_image_count", 0),
+                "ocr_images": manifest.get("ocr_image_count", 0),
+                "ocr_items": manifest.get("ocr_item_count", 0),
+                "ocr_review_images": manifest.get("ocr_review_image_count", 0),
+                "ocr_review_items": manifest.get("ocr_review_item_count", 0),
                 "warnings": manifest.get("warnings", []),
             },
             "google_drive": (

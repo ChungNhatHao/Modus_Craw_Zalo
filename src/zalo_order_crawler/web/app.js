@@ -146,6 +146,8 @@ function renderResults(results, crawlState) {
     const drive = result.google_drive || {};
     const driveLinks = [
       [drive.sheet, "Mở Google Sheet"],
+      [drive.ocr_sheet, "Mở tab Đơn hàng OCR"],
+      [drive.ocr_review_sheet, "Mở tab OCR cần kiểm tra"],
       [drive.image_folder, "Mở thư mục ảnh"],
       [drive.branch_config, "Mở cấu hình chi nhánh"],
     ];
@@ -281,6 +283,8 @@ function renderAiMessages() {
 
 function renderAiMessage(message) {
   const decision = message.decision || {};
+  const ocrResults = Array.isArray(message.ocr_results) ? message.ocr_results : [];
+  const imageNeedsReview = ocrResults.some((result) => Boolean(result.needs_review));
   const isOrder = Boolean(decision.is_order);
   const card = document.createElement("article");
   card.className = `ai-message-card ${isOrder ? "is-order" : "not-order"}`;
@@ -303,6 +307,12 @@ function renderAiMessage(message) {
     const review = document.createElement("span");
     review.className = "decision-badge review";
     review.textContent = "Cần kiểm tra";
+    badges.append(review);
+  }
+  if (imageNeedsReview) {
+    const review = document.createElement("span");
+    review.className = "decision-badge review";
+    review.textContent = "Ảnh cần kiểm tra";
     badges.append(review);
   }
   header.append(identity, badges);
@@ -351,10 +361,26 @@ function renderAiMessage(message) {
     dataConfidence.textContent = `Thông tin đơn: ${dataPercent === null ? "Chưa có" : `${dataPercent}%`}`;
     confidenceRow.append(dataConfidence);
   }
+  ocrResults.forEach((result, index) => {
+    const qualityPercent = confidencePercent(result.image_quality_score);
+    const quality = document.createElement("span");
+    quality.className = `confidence-chip ${confidenceTone(qualityPercent)}`;
+    const suffix = ocrResults.length > 1 ? ` ${index + 1}` : "";
+    quality.textContent = `Chất lượng ảnh${suffix}: ${qualityPercent === null ? "Chưa có" : `${qualityPercent}%`}`;
+    confidenceRow.append(quality);
+  });
   evaluation.append(confidenceRow);
   const reason = document.createElement("p");
   reason.textContent = decision.reason || "AI chưa trả lý do";
   evaluation.append(reason);
+  ocrResults.forEach((result) => {
+    if (!result.review_reason && !result.image_quality_reason) return;
+    const qualityReason = document.createElement("p");
+    qualityReason.textContent = result.review_reason
+      ? `Lý do cần kiểm tra: ${result.review_reason}`
+      : `Đánh giá ảnh: ${result.image_quality_reason}`;
+    evaluation.append(qualityReason);
+  });
 
   const products = Array.isArray(decision.products) ? decision.products : [];
   const quantities = Array.isArray(decision.quantities) ? decision.quantities : [];

@@ -63,9 +63,9 @@ Có thể dùng cổng khác hoặc không tự mở trang UI:
    OCR và trích xuất mã khách hàng, tên khách hàng, tên hàng, đơn vị, số lượng. Ảnh thể
    hiện đơn giá/thành tiền (phiếu nhận hàng) sẽ tự động bị bỏ qua, chỉ trích xuất phiếu
    đặt hàng thuần.
-9. Ghi phần nội dung chữ vào Google Sheet theo ngày, tải `message_image` lên folder
-   ảnh cùng ngày, và gộp dữ liệu OCR đơn đặt hàng của mọi nhóm trong ngày vào một file
-   Excel `DD-MM-YYYY_OCR.xlsx` trong folder Drive đã cấu hình.
+9. Ghi phần nội dung chữ vào tab `Tin nhắn` của Google Sheet theo ngày, tải
+   `message_image` lên folder ảnh cùng ngày, và gộp dữ liệu OCR đơn đặt hàng của mọi
+   nhóm trong ngày vào tab `Đơn hàng OCR` của cùng Google Sheet.
 
 ## Cài đặt
 
@@ -117,9 +117,10 @@ chạy lại dữ liệu cũ. Nếu chạy lại cùng nhóm và ngày, tool dù
 không thêm lại tin nhắn/ảnh/dòng OCR có cùng định danh. Có thể đặt
 `GOOGLE_DRIVE_UPLOAD_ENABLED=false` để chỉ lưu output cục bộ.
 
-File Excel `DD-MM-YYYY_OCR.xlsx` chứa dữ liệu OCR từ ảnh phiếu đặt hàng, được tạo
-trong cùng folder output và dùng chung cho mọi nhóm crawl trong ngày đó; mỗi lượt
-crawl chỉ thêm các dòng mới (mã tin nhắn + tên hàng chưa tồn tại) thay vì ghi đè.
+Tab `Đơn hàng OCR` trong Google Sheet `DD-MM-YYYY` chứa ngày, nhóm, chi nhánh, mã tin
+nhắn, mã khách hàng, tên khách hàng, tên hàng, đơn vị và số lượng từ ảnh phiếu hoặc
+đơn đặt trực tiếp bằng chữ. Tab này dùng chung cho mọi nhóm crawl trong ngày; mỗi lượt
+chỉ thêm các dòng mới (nhóm + mã tin nhắn + tên hàng chưa tồn tại) thay vì ghi đè.
 
 ### Cấu hình chi nhánh
 
@@ -130,7 +131,17 @@ Tạo hoặc kiểm tra Google Sheet cấu hình trong folder Drive output:
 ```
 
 Sheet `Cấu hình chi nhánh` có hai cột `Tên nhận diện` và `Chi nhánh chuẩn`, được tạo
-sẵn với các ánh xạ:
+sẵn với các ánh xạ dưới đây. Cùng file này còn có tab `Sản phẩm` để chuẩn hóa kết quả
+OCR, gồm `Chi nhánh`, `Tên sản phẩm chuẩn`, `Đơn vị` và
+`Tên thay thế (phân cách bằng |)`. Để trống `Chi nhánh` nếu sản phẩm dùng chung cho
+mọi nơi; dùng `*` cũng có cùng ý nghĩa. Ví dụ:
+
+```text
+Chi nhánh Tân Phú    Ngò gai    kg    ngà gai | ngo gai
+(để trống)           Cần tàu    kg
+```
+
+Các ánh xạ chi nhánh mặc định:
 
 ```text
 S6                 → Chi nhánh Phạm Văn Đồng
@@ -221,6 +232,37 @@ output/<ten-nhom>/<YYYY-MM-DD>/<HHMMSS>/
 ```
 
 File `DD-MM-YYYY.csv` và `DD-MM-YYYY-ocr.csv` dùng UTF-8 BOM để Excel trên Windows đọc tiếng Việt đúng.
+
+Mỗi ảnh đơn hàng được Gemini chấm `image_quality_score` từ 0 đến 1 và đánh giá
+`image_quality_affects_output`. Nếu điểm dưới 0,85 và chất lượng ảnh có thể trực tiếp
+làm sai hoặc thiếu dữ liệu, order không được ghi vào tab `Đơn hàng OCR`. Tool chuyển
+order sang tab `OCR cần kiểm tra` trong cùng Google Sheet, kèm điểm chất lượng, lý do,
+link ảnh và các dòng OCR đọc được để khách kiểm tra thủ công. Ảnh đạt đúng 0,85 không
+bị chuyển tab theo riêng quy tắc chất lượng ảnh này.
+
+Mặc định, OCR tăng cường chia ảnh theo chiều dài thành 4 vùng có chồng lấn, tăng tương
+phản/làm nét/phóng lớn từng vùng rồi so sánh với lượt đọc toàn ảnh. Tên hàng được chuẩn
+hóa theo tab `Sản phẩm`. Tên ngoài danh mục, số lượng không thống nhất giữa hai lượt,
+hoặc mặt hàng không được lượt chia vùng xác nhận sẽ chuyển sang tab kiểm tra. Có thể
+điều chỉnh bằng:
+
+```dotenv
+OCR_ENHANCEMENT_ENABLED=true
+OCR_TILE_COUNT=4
+```
+
+Chế độ này thực hiện hai request Gemini cho mỗi ảnh: một lượt toàn ảnh và một lượt chứa
+tất cả các vùng đã làm rõ. Cách này giảm bỏ sót trên bảng dài và phát hiện các kết quả
+mâu thuẫn. Bước phân loại ảnh chỉ quyết định đây có phải đơn hàng và xác định chi nhánh;
+tính đầy đủ của sản phẩm/số lượng được giao cho OCR chuyên dụng đánh giá. Khi chạy lại cùng ngày, các
+dòng của cùng mã tin nhắn từng được ghi ở tab `Đơn hàng OCR` sẽ được xóa trước khi đưa
+đơn sang tab kiểm tra, tránh giữ hai bản mâu thuẫn. Thứ tự tab luôn là `Tin nhắn`, `Đơn hàng OCR`, rồi
+`OCR cần kiểm tra`; tab `Đơn hàng OCR` vẫn được tạo với hàng tiêu đề khi tất cả đơn
+ảnh đều cần kiểm tra để nhân viên có bố cục nhất quán.
+
+Các lệnh đọc Google API tự thử lại tối đa 3 lần khi gặp timeout, lỗi kết nối tạm thời,
+HTTP 408, 429 hoặc lỗi máy chủ 5xx. Lệnh ghi không tự chạy lại để tránh tạo trùng dữ
+liệu nếu Google đã nhận lệnh nhưng phản hồi bị mất.
 
 ## Khi giao diện Zalo thay đổi
 

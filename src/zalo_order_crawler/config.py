@@ -50,6 +50,8 @@ class Settings:
     allow_zalo_history_sync: bool
     google_drive_upload_enabled: bool = True
     google_drive_parent_folder_id: str = DEFAULT_GOOGLE_DRIVE_PARENT_FOLDER_ID
+    ocr_enhancement_enabled: bool = True
+    ocr_tile_count: int = 4
 
     @classmethod
     def from_env(
@@ -107,6 +109,10 @@ class Settings:
                 "GOOGLE_DRIVE_PARENT_FOLDER_ID",
                 DEFAULT_GOOGLE_DRIVE_PARENT_FOLDER_ID,
             ).strip(),
+            ocr_enhancement_enabled=_as_bool(
+                values, "OCR_ENHANCEMENT_ENABLED", True
+            ),
+            ocr_tile_count=_as_int(values, "OCR_TILE_COUNT", 4),
         )
 
 

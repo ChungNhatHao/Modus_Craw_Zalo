@@ -150,6 +150,12 @@ def write_order_ocr_csv(
         "group",
         "message_id",
         "media_path",
+        "image_quality_score",
+        "image_quality_percent",
+        "image_quality_affects_output",
+        "needs_review",
+        "image_quality_reason",
+        "review_reason",
         "customer_code",
         "customer_name",
         "product_name",
@@ -160,19 +166,34 @@ def write_order_ocr_csv(
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for result in ocr_results:
-            if not result.applicable:
+            if not result.applicable and not result.needs_review:
                 continue
-            for item in result.items:
+            items: list[OcrLineItem | None] = list(result.items) or [None]
+            for item in items:
                 writer.writerow(
                     {
                         "date": display_date,
                         "group": group_name,
                         "message_id": result.message_id,
                         "media_path": result.media_path,
-                        "customer_code": item.customer_code,
-                        "customer_name": item.customer_name,
-                        "product_name": item.product_name,
-                        "unit": item.unit,
-                        "quantity": item.quantity if item.quantity is not None else "",
+                        "image_quality_score": result.image_quality_score,
+                        "image_quality_percent": round(
+                            result.image_quality_score * 100, 1
+                        ),
+                        "image_quality_affects_output": (
+                            result.image_quality_affects_output
+                        ),
+                        "needs_review": result.needs_review,
+                        "image_quality_reason": result.image_quality_reason or "",
+                        "review_reason": result.review_reason or "",
+                        "customer_code": item.customer_code if item else "",
+                        "customer_name": item.customer_name if item else "",
+                        "product_name": item.product_name if item else "",
+                        "unit": item.unit if item else "",
+                        "quantity": (
+                            item.quantity
+                            if item is not None and item.quantity is not None
+                            else ""
+                        ),
                     }
                 )

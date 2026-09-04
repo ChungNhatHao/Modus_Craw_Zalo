@@ -221,35 +221,52 @@ class GeminiOrderClassifier:
         if missing:
             raise ValueError(f"Gemini thiếu decision cho message_id: {', '.join(missing[:5])}")
         results: list[OrderDecision] = []
+        messages_by_id = {message.message_id: message for message in messages}
         for message_id in expected:
             decision = by_id[message_id]
             branch_name = self._canonical_branch_name(decision.branch_name)
             decision = decision.model_copy(update={"branch_name": branch_name})
+            message = messages_by_id[message_id]
+            has_order_image = any(
+                media.role == "message_image"
+                and media.mime_type.startswith("image/")
+                for media in message.media
+            )
             results.append(
                 self._apply_review_policy(
                     decision,
                     require_branch=bool(self.branch_mappings),
+                    require_structured_data=not has_order_image,
                 )
             )
         return results
 
     @staticmethod
     def _apply_review_policy(
-        decision: OrderDecision, *, require_branch: bool = False
+        decision: OrderDecision,
+        *,
+        require_branch: bool = False,
+        require_structured_data: bool = True,
     ) -> OrderDecision:
         data_confidence = decision.data_confidence
         if not decision.is_order:
             data_confidence = 0
-        elif not decision.products:
+        elif require_structured_data and not decision.products:
             data_confidence = min(data_confidence, 0.5)
-        elif not decision.quantities:
+        elif require_structured_data and not decision.quantities:
             data_confidence = min(data_confidence, 0.75)
-        elif len(decision.products) != len(decision.quantities):
+        elif require_structured_data and len(decision.products) != len(
+            decision.quantities
+        ):
             data_confidence = min(data_confidence, 0.8)
 
         needs_review = (
             decision.confidence < 0.9
-            or (decision.is_order and data_confidence < 0.9)
+            or (
+                decision.is_order
+                and require_structured_data
+                and data_confidence < 0.9
+            )
             or (decision.is_order and require_branch and not decision.branch_name)
         )
         return decision.model_copy(

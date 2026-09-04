@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+OCR_IMAGE_QUALITY_REVIEW_THRESHOLD = 0.85
 
 
 class MediaAsset(BaseModel):
@@ -56,6 +59,13 @@ class OrderDecisionBatch(BaseModel):
     decisions: list[OrderDecision]
 
 
+class ProductCatalogEntry(BaseModel):
+    branch_name: str = ""
+    product_name: str
+    unit: str = ""
+    aliases: list[str] = Field(default_factory=list)
+
+
 class OcrLineItem(BaseModel):
     customer_code: str = ""
     customer_name: str = ""
@@ -69,7 +79,45 @@ class ImageOcrResult(BaseModel):
     media_path: str
     applicable: bool
     skip_reason: str | None = None
+    image_quality_score: float = Field(default=1.0, ge=0, le=1)
+    image_quality_affects_output: bool = False
+    image_quality_reason: str | None = None
+    needs_review: bool = False
+    review_reason: str | None = None
     items: list[OcrLineItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def apply_image_quality_review_policy(self) -> "ImageOcrResult":
+        quality_requires_review = (
+            self.image_quality_score < OCR_IMAGE_QUALITY_REVIEW_THRESHOLD
+            and self.image_quality_affects_output
+        )
+        self.needs_review = self.needs_review or quality_requires_review
+        if quality_requires_review and not self.review_reason:
+            self.review_reason = (
+                self.image_quality_reason
+                or "Chất lượng ảnh có thể làm sai hoặc thiếu kết quả OCR."
+            )
+        return self
+
+    def apply_order_review_policy(
+        self, decision: OrderDecision
+    ) -> "ImageOcrResult":
+        if not decision.needs_review:
+            return self
+
+        data_percent = round(decision.data_confidence * 100, 1)
+        decision_reason = (
+            "Độ tin cậy thông tin đơn ở bước phân loại chỉ đạt "
+            f"{data_percent:g}%; cần đối chiếu lại tên hàng, số lượng và chi nhánh."
+        )
+        reasons = [reason for reason in (self.review_reason, decision_reason) if reason]
+        return self.model_copy(
+            update={
+                "needs_review": True,
+                "review_reason": " ".join(dict.fromkeys(reasons)),
+            }
+        )
 
 
 class CrawlManifest(BaseModel):
@@ -86,6 +134,8 @@ class CrawlManifest(BaseModel):
     message_image_count: int = 0
     ocr_image_count: int = 0
     ocr_item_count: int = 0
+    ocr_review_image_count: int = 0
+    ocr_review_item_count: int = 0
     files: dict[str, str]
     google_drive: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)

@@ -71,7 +71,9 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         branch_config = drive_publisher.ensure_branch_config()
         print(
             "Cấu hình chi nhánh: "
-            f"{len(branch_config.mappings)} ánh xạ; {branch_config.resource.url}"
+            f"{len(branch_config.mappings)} ánh xạ; "
+            f"{len(branch_config.products)} sản phẩm chuẩn; "
+            f"{branch_config.resource.url}"
         )
 
     started_at = datetime.now(settings.timezone)
@@ -165,6 +167,9 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
                 model=settings.gemini_model,
                 cache_dir=settings.project_dir / ".cache" / "gemini-ocr",
                 media_base_dir=run_dir,
+                product_catalog=(branch_config.products if branch_config else ()),
+                enhancement_enabled=settings.ocr_enhancement_enabled,
+                tile_count=settings.ocr_tile_count,
             )
             ocr_results = ocr_engine.extract(cleaned, decisions)
             write_jsonl(order_ocr_jsonl, ocr_results)
@@ -202,6 +207,10 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
     ocr_item_count = sum(
         len(result.items) for result in ocr_results if result.applicable
     )
+    ocr_review_image_count = sum(result.needs_review for result in ocr_results)
+    ocr_review_item_count = sum(
+        len(result.items) for result in ocr_results if result.needs_review
+    )
     google_drive: dict[str, object] = {}
     if branch_config is not None:
         google_drive["branch_config"] = {
@@ -209,6 +218,7 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
             "name": branch_config.resource.name,
             "url": branch_config.resource.url,
             "mappings_loaded": len(branch_config.mappings),
+            "products_loaded": len(branch_config.products),
         }
     drive_error: Exception | None = None
     if drive_publisher is not None:
@@ -245,6 +255,8 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
         message_image_count=message_image_count,
         ocr_image_count=len(ocr_results),
         ocr_item_count=ocr_item_count,
+        ocr_review_image_count=ocr_review_image_count,
+        ocr_review_item_count=ocr_review_item_count,
         files=files,
         google_drive=google_drive,
         warnings=warnings,
@@ -262,15 +274,27 @@ def _run_crawl(args: argparse.Namespace, *, with_ai: bool) -> int:
                 f"Ảnh OCR phiếu đặt hàng: {manifest.ocr_image_count}; "
                 f"mặt hàng trích xuất: {manifest.ocr_item_count}"
             )
+            if manifest.ocr_review_image_count:
+                print(
+                    "Ảnh OCR cần khách kiểm tra: "
+                    f"{manifest.ocr_review_image_count}; "
+                    f"dòng OCR liên quan: {manifest.ocr_review_item_count}"
+                )
     sheet = google_drive.get("sheet")
     if isinstance(sheet, dict):
         print(f"Google Sheet: {sheet.get('url', '')}")
     image_folder = google_drive.get("image_folder")
     if isinstance(image_folder, dict):
         print(f"Thư mục ảnh Google Drive: {image_folder.get('url', '')}")
-    ocr_workbook = google_drive.get("ocr_workbook")
-    if isinstance(ocr_workbook, dict):
-        print(f"File Excel OCR đơn đặt hàng: {ocr_workbook.get('url', '')}")
+    ocr_sheet = google_drive.get("ocr_sheet")
+    if isinstance(ocr_sheet, dict):
+        print(f"Google Sheet OCR đơn đặt hàng: {ocr_sheet.get('url', '')}")
+    ocr_review_sheet = google_drive.get("ocr_review_sheet")
+    if isinstance(ocr_review_sheet, dict):
+        print(
+            "Google Sheet OCR cần khách kiểm tra: "
+            f"{ocr_review_sheet.get('url', '')}"
+        )
     branch_config_output = google_drive.get("branch_config")
     if isinstance(branch_config_output, dict):
         print(f"Cấu hình chi nhánh: {branch_config_output.get('url', '')}")
@@ -354,6 +378,7 @@ def _run_branch_config(args: argparse.Namespace) -> int:
     config = publisher.ensure_branch_config()
     print(f"Google Drive output: {destination.name}")
     print(f"Google Sheet cấu hình: {config.resource.url}")
+    print(f"Sản phẩm chuẩn đã tải: {len(config.products)}")
     for alias, branch_name in config.mappings.items():
         print(f"- {alias} = {branch_name}")
     return 0
