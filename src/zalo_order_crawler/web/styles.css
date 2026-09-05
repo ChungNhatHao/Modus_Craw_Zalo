@@ -172,6 +172,7 @@ h2 { margin-bottom: 5px; font-size: 20px; letter-spacing: -0.018em; }
   font-size: 14px;
   font-weight: 750;
   cursor: pointer;
+  text-decoration: none;
   transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
 }
 

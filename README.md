@@ -45,6 +45,165 @@ Có thể dùng cổng khác hoặc không tự mở trang UI:
 .venv/bin/zalo-order-crawler ui --port 8899 --no-open
 ```
 
+## Triển khai trên server Ubuntu/Debian
+
+Lệnh `zalo-order-crawler ui` ở phần trên dành cho máy có màn hình. Chế độ
+`persistent` mở Chrome với giao diện (`headless=False`), vì vậy server Linux không có
+`DISPLAY` phải chạy thêm Xvfb. Dự án có script dựng sẵn Xvfb, Fluxbox, x11vnc và
+noVNC để máy client có thể nhìn cửa sổ Chrome trên server khi đăng nhập Zalo.
+
+### 1. Cài gói hệ thống và trình duyệt
+
+```bash
+sudo apt-get update
+sudo apt-get install -y xvfb x11vnc fluxbox novnc websockify x11-utils
+
+source .venv/bin/activate
+python -m playwright install --with-deps chromium
+```
+
+Nếu dùng Chromium do Playwright tải, đặt `BROWSER_CHANNEL=` thành chuỗi rỗng trong
+`.env`. Nếu giữ `BROWSER_CHANNEL=chrome`, server phải cài Google Chrome tương ứng.
+
+### 2. Khởi động web tool cùng màn hình từ xa
+
+```bash
+./scripts/run-server-ui.sh
+```
+
+Script mặc định tạo các dịch vụ chỉ trên loopback:
+
+- web tool: `127.0.0.1:8765`
+- noVNC: `127.0.0.1:6080`
+- VNC nội bộ: `127.0.0.1:5900`
+- màn hình ảo: `:99`, độ phân giải `1920x1080x24`
+
+Có thể đổi cấu hình bằng biến môi trường trước khi chạy:
+
+```bash
+ZALO_UI_PORT=8899 \
+ZALO_NOVNC_PORT=6081 \
+ZALO_VNC_PORT=5901 \
+ZALO_DISPLAY=:100 \
+ZALO_SCREEN=1600x900x24 \
+./scripts/run-server-ui.sh
+```
+
+Khi cần đưa web tool qua reverse proxy hoặc Cloudflare Tunnel để test, bật Basic
+Auth và mật khẩu VNC trước khi chạy:
+
+```bash
+mkdir -p .runtime
+x11vnc -storepasswd 'MAT_KHAU_VNC' .runtime/vnc.pass
+ZALO_WEB_USERNAME=tester \
+ZALO_WEB_PASSWORD='MAT_KHAU_WEB_MANH' \
+ZALO_VNC_PASSWORD_FILE="$PWD/.runtime/vnc.pass" \
+./scripts/run-server-ui.sh
+```
+
+Không commit các mật khẩu này hoặc file `.runtime/vnc.pass` vào Git.
+
+Log của Xvfb, Fluxbox và noVNC được lưu tại `.runtime/server-display/`.
+
+### 3. Truy cập an toàn từ máy client
+
+Trên máy client, mở SSH tunnel và giữ terminal này chạy:
+
+```bash
+ssh -N \
+  -L 8765:127.0.0.1:8765 \
+  -L 6080:127.0.0.1:6080 \
+  user@SERVER_IP
+```
+
+Sau đó trên client:
+
+1. Mở web tool tại `http://127.0.0.1:8765/`.
+2. Trong web tool bấm **Mở màn hình server**; hoặc mở trực tiếp
+   `http://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale`.
+3. Bấm **Mở Zalo để đăng nhập**.
+4. Trong màn hình noVNC, đăng nhập/quét QR và đồng bộ ở cửa sổ Chrome của server.
+5. Quay lại web tool, bấm **Đã đăng nhập & đồng bộ xong**, rồi chạy crawl.
+
+Hồ sơ `.browser-profile` nằm trên server và được tái sử dụng cho các lần sau. Không
+chạy đồng thời nhiều tiến trình dùng cùng hồ sơ này.
+
+Không mở trực tiếp các cổng `5900`, `6080`, `8765` hoặc CDP `9222` ra Internet.
+Nếu dùng Nginx thay SSH tunnel, phải bật HTTPS, lớp đăng nhập/SSO và WebSocket proxy
+cho noVNC. Web tool cố ý chỉ bind vào loopback để bảo vệ cookie và dữ liệu Zalo.
+
+### 4. Cloudflare Quick Tunnel để kiểm thử
+
+Cài `cloudflared` theo
+[hướng dẫn chính thức](https://developers.cloudflare.com/tunnel/downloads/).
+Quick Tunnel là URL ngẫu nhiên, không có SLA và chỉ phù hợp kiểm thử. Luôn bật
+Basic Auth và mật khẩu VNC trước khi public.
+
+Terminal 1 — tạo tunnel noVNC trước và ghi lại URL được cấp:
+
+```bash
+cloudflared tunnel --no-autoupdate --url http://127.0.0.1:6080
+```
+
+Terminal 2 — khởi động tool và gắn URL noVNC vào nút trên UI:
+
+```bash
+mkdir -p .runtime
+x11vnc -storepasswd 'MAT_KHAU_VNC' .runtime/vnc.pass
+
+ZALO_WEB_USERNAME=tester \
+ZALO_WEB_PASSWORD='MAT_KHAU_WEB_MANH' \
+ZALO_VNC_PORT=5901 \
+ZALO_VNC_PASSWORD_FILE="$PWD/.runtime/vnc.pass" \
+ZALO_NOVNC_URL='https://URL-NOVNC.trycloudflare.com/vnc.html?autoconnect=true&resize=scale' \
+./scripts/run-server-ui.sh
+```
+
+Terminal 3 — public web tool:
+
+```bash
+cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8765
+```
+
+Kiểm tra URL web phải trả `401` khi chưa nhập Basic Auth; sau đó mở nút
+**Mở màn hình server** và nhập mật khẩu VNC. Khi test xong, nhấn `Ctrl+C`
+trong cả ba terminal và xóa `.runtime/vnc.pass`. Dùng named tunnel kèm
+Cloudflare Access thay Quick Tunnel nếu triển khai lâu dài.
+
+Nếu không có quyền `sudo`, script cũng tự tìm binary đã giải nén trong
+`.runtime/tools/rootfs/usr/bin`, noVNC trong `.runtime/tools/rootfs/usr/share/novnc`
+và `websockify` trong `.venv/bin`. Đây chỉ là phương án phục hồi; server
+chính thức nên cài gói hệ thống như bước 1.
+
+### 5. Chạy nền bằng systemd
+
+Mẫu service nằm tại `deploy/zalo-order-crawler.service.example`. Sửa `User`, `Group`
+và đường dẫn `/opt/Modus_Craw_Zalo` cho đúng server. Các biến mà shell
+khởi động cần được đặt trong `/etc/zalo-order-crawler.env`, vì script không
+thực thi `.env` như một shell script:
+
+```dotenv
+ZALO_WEB_USERNAME=tester
+ZALO_WEB_PASSWORD=MAT_KHAU_WEB_MANH
+ZALO_VNC_PORT=5901
+ZALO_VNC_PASSWORD_FILE=/opt/Modus_Craw_Zalo/.runtime/vnc.pass
+ZALO_NOVNC_URL=https://novnc.example.com/vnc.html?autoconnect=true&resize=scale
+```
+
+Chỉ user chạy service và quản trị viên được phép đọc file môi trường
+này. Sau đó cài service:
+
+```bash
+sudo cp deploy/zalo-order-crawler.service.example \
+  /etc/systemd/system/zalo-order-crawler.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now zalo-order-crawler
+sudo systemctl status zalo-order-crawler
+```
+
+User chạy service phải có quyền đọc `.env`, ghi `.browser-profile`, `.runtime`,
+`output` và token Google Drive. Không chạy service bằng `root`.
+
 ## Luồng xử lý
 
 1. Dùng một hồ sơ trình duyệt riêng có lưu phiên đăng nhập, hoặc kết nối Chrome/Edge
@@ -251,9 +410,10 @@ OCR_ENHANCEMENT_ENABLED=true
 OCR_TILE_COUNT=4
 ```
 
-Chế độ này thực hiện hai request Gemini cho mỗi ảnh: một lượt toàn ảnh và một lượt chứa
-tất cả các vùng đã làm rõ. Cách này giảm bỏ sót trên bảng dài và phát hiện các kết quả
-mâu thuẫn. Bước phân loại ảnh chỉ quyết định đây có phải đơn hàng và xác định chi nhánh;
+Chế độ này thực hiện một lượt toàn ảnh, một lượt chứa các vùng đã làm rõ và chỉ gọi
+thêm lượt xác minh tập trung khi hai kết quả khác nhau. Cách này giảm bỏ sót trên bảng
+dài và xử lý các kết quả mâu thuẫn. Bước phân loại ảnh chỉ quyết định đây có phải đơn
+hàng và xác định chi nhánh;
 tính đầy đủ của sản phẩm/số lượng được giao cho OCR chuyên dụng đánh giá. Khi chạy lại cùng ngày, các
 dòng của cùng mã tin nhắn từng được ghi ở tab `Đơn hàng OCR` sẽ được xóa trước khi đưa
 đơn sang tab kiểm tra, tránh giữ hai bản mâu thuẫn. Thứ tự tab luôn là `Tin nhắn`, `Đơn hàng OCR`, rồi

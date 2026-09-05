@@ -1,11 +1,34 @@
 from __future__ import annotations
 
+import os
+import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
 from .config import Settings
+
+
+def ensure_headed_browser_environment(
+    *,
+    platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> None:
+    """Give Linux server deployments an actionable error before Chrome starts."""
+    current_platform = platform or sys.platform
+    values = environ if environ is not None else os.environ
+    if not current_platform.startswith("linux"):
+        return
+    if values.get("DISPLAY") or values.get("WAYLAND_DISPLAY"):
+        return
+    raise RuntimeError(
+        "Server Linux không có DISPLAY để mở Chrome có giao diện. "
+        "Hãy khởi động web tool bằng scripts/run-server-ui.sh "
+        "(Xvfb + noVNC), hoặc cấu hình BROWSER_MODE=cdp để kết nối "
+        "tới một Chrome đã chạy."
+    )
 
 
 class BrowserSession:
@@ -19,6 +42,8 @@ class BrowserSession:
         self.page: Page | None = None
 
     def __enter__(self) -> "BrowserSession":
+        if self.settings.browser_mode == "persistent":
+            ensure_headed_browser_environment()
         self._playwright = sync_playwright().start()
         chromium = self._playwright.chromium
 

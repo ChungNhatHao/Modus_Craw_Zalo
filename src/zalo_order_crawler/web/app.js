@@ -4,6 +4,7 @@ const elements = {
   authPill: $("#auth-pill"),
   authMessage: $("#auth-message"),
   authStart: $("#auth-start"),
+  authRemote: $("#auth-remote"),
   authComplete: $("#auth-complete"),
   form: $("#crawl-form"),
   groups: $("#groups"),
@@ -487,6 +488,10 @@ async function initialise() {
     const bootstrap = await api("/api/bootstrap");
     elements.date.value = bootstrap.today;
     elements.timezone.textContent = `Mặc định hôm nay · Múi giờ ${bootstrap.timezone}`;
+    if (bootstrap.novnc_url) {
+      elements.authRemote.href = bootstrap.novnc_url;
+      elements.authRemote.hidden = false;
+    }
     if (!elements.groups.value && bootstrap.default_groups.length) {
       elements.groups.value = bootstrap.default_groups.join("\n");
     }

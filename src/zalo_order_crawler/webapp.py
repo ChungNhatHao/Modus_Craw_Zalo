@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hmac
 import json
 import os
 import subprocess
@@ -53,6 +56,35 @@ def validate_iso_date(value: Any) -> str:
         raise ValueError("Ngày crawl phải có định dạng YYYY-MM-DD.") from exc
 
 
+def normalise_novnc_url(value: str) -> str:
+    url = value.strip()
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return url
+
+
+def basic_auth_matches(
+    header: str | None,
+    credentials: tuple[str, str] | None,
+) -> bool:
+    if credentials is None:
+        return True
+    if not header or not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    username, separator, password = decoded.partition(":")
+    expected_username, expected_password = credentials
+    return bool(separator) and hmac.compare_digest(
+        username, expected_username
+    ) and hmac.compare_digest(password, expected_password)
+
+
 def _read_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -99,6 +131,7 @@ class AppManager:
             "today": datetime.now(self.settings.timezone).date().isoformat(),
             "default_groups": [self.settings.group_name] if self.settings.group_name else [],
             "timezone": str(self.settings.timezone),
+            "novnc_url": normalise_novnc_url(os.environ.get("ZALO_NOVNC_URL", "")),
         }
 
     def status(self) -> dict[str, Any]:
@@ -466,6 +499,7 @@ class AppManager:
 class AppHTTPServer(ThreadingHTTPServer):
     manager: AppManager
     static_dir: Path
+    auth_credentials: tuple[str, str] | None
 
 
 class AppRequestHandler(BaseHTTPRequestHandler):
@@ -475,6 +509,8 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         print(f"[UI] {self.address_string()} - {format % args}")
 
     def do_GET(self) -> None:
+        if not self._authorise():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
@@ -510,6 +546,8 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
     def do_POST(self) -> None:
+        if not self._authorise():
+            return
         path = urlparse(self.path).path
         try:
             payload = self._request_json()
@@ -547,6 +585,19 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(value, dict):
             raise ValueError("Request phải là một JSON object.")
         return value
+
+    def _authorise(self) -> bool:
+        if basic_auth_matches(
+            self.headers.get("Authorization"), self.server.auth_credentials
+        ):
+            return True
+        payload = b"Authentication required."
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("WWW-Authenticate", 'Basic realm="Zalo Order Crawler", charset="UTF-8"')
+        self._common_headers("text/plain; charset=utf-8", len(payload))
+        self.end_headers()
+        self.wfile.write(payload)
+        return False
 
     def _static(self, filename: str, content_type: str) -> None:
         path = self.server.static_dir / filename
@@ -603,9 +654,19 @@ def serve_ui(
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("UI chỉ được phép bind vào loopback để bảo vệ dữ liệu Zalo.")
     static_dir = Path(__file__).with_name("web")
+    auth_username = os.environ.get("ZALO_WEB_USERNAME", "")
+    auth_password = os.environ.get("ZALO_WEB_PASSWORD", "")
+    if bool(auth_username) != bool(auth_password):
+        raise ValueError(
+            "Phải cấu hình cả ZALO_WEB_USERNAME và ZALO_WEB_PASSWORD, "
+            "hoặc bỏ trống cả hai."
+        )
     server = AppHTTPServer((host, port), AppRequestHandler)
     server.manager = AppManager(settings)
     server.static_dir = static_dir
+    server.auth_credentials = (
+        (auth_username, auth_password) if auth_username and auth_password else None
+    )
     url = f"http://{host}:{port}/"
     print(f"Giao diện đang chạy tại {url}")
     print("Nhấn Ctrl+C để dừng.")

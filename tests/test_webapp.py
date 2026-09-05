@@ -1,4 +1,5 @@
 from datetime import datetime
+import base64
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -6,7 +7,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from zalo_order_crawler.config import Settings
-from zalo_order_crawler.webapp import AppManager, normalise_groups, validate_iso_date
+from zalo_order_crawler.webapp import (
+    AppManager,
+    basic_auth_matches,
+    normalise_groups,
+    validate_iso_date,
+)
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -48,6 +54,16 @@ def test_validate_iso_date() -> None:
         validate_iso_date("28/08/2026")
 
 
+def test_basic_auth_matches_configured_credentials() -> None:
+    encoded = base64.b64encode(b"tester:secret-password").decode("ascii")
+
+    assert basic_auth_matches(f"Basic {encoded}", ("tester", "secret-password"))
+    assert not basic_auth_matches(f"Basic {encoded}", ("tester", "wrong"))
+    assert not basic_auth_matches(None, ("tester", "secret-password"))
+    assert not basic_auth_matches("Basic not-base64!", ("tester", "secret-password"))
+    assert basic_auth_matches(None, None)
+
+
 def test_bootstrap_uses_timezone_today_and_default_group(tmp_path: Path) -> None:
     manager = AppManager(make_settings(tmp_path))
     bootstrap = manager.bootstrap()
@@ -55,6 +71,29 @@ def test_bootstrap_uses_timezone_today_and_default_group(tmp_path: Path) -> None
     assert bootstrap["today"] == datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date().isoformat()
     assert bootstrap["default_groups"] == ["Modus-test bot v2"]
     assert bootstrap["timezone"] == "Asia/Ho_Chi_Minh"
+
+
+def test_bootstrap_exposes_configured_novnc_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "ZALO_NOVNC_URL",
+        "http://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale",
+    )
+
+    bootstrap = AppManager(make_settings(tmp_path)).bootstrap()
+
+    assert bootstrap["novnc_url"].startswith("http://127.0.0.1:6080/")
+
+
+def test_bootstrap_rejects_unsafe_novnc_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ZALO_NOVNC_URL", "javascript:alert(1)")
+
+    bootstrap = AppManager(make_settings(tmp_path)).bootstrap()
+
+    assert bootstrap["novnc_url"] == ""
 
 
 def test_crawl_worker_runs_groups_sequentially(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
